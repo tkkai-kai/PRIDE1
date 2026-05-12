@@ -47,7 +47,7 @@ ENV_MJLIB_PATH = "MJLIB_PATH"
 ENV_MJKEY_PATH = "MJKEY_PATH"
 
 
-MJLIB_NAME = "mujoco200"
+MJLIB_NAME = "mujoco210"
 
 
 def _get_shared_library_filename():
@@ -66,7 +66,7 @@ def _get_shared_library_filename():
   return "{}{}.{}".format(prefix, MJLIB_NAME, extension)
 
 
-DEFAULT_MJLIB_DIR = "~/.mujoco/mujoco200_{}/bin".format(_PLATFORM_SUFFIX)
+DEFAULT_MJLIB_DIR = "~/.mujoco/mujoco210/bin".format(_PLATFORM_SUFFIX)
 DEFAULT_MJLIB_PATH = os.path.join(
     DEFAULT_MJLIB_DIR, _get_shared_library_filename())
 DEFAULT_MJKEY_PATH = "~/.mujoco/mjkey.txt"

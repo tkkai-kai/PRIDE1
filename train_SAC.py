@@ -38,6 +38,12 @@ class Workspace(object):
         else:
             self.env = utils.make_env(cfg)
 
+        self.max_episode_steps = getattr(self.env, '_max_episode_steps', None)
+        if self.max_episode_steps is None and getattr(self.env, 'spec', None) is not None:
+            self.max_episode_steps = getattr(self.env.spec, 'max_episode_steps', None)
+        if self.max_episode_steps is None:
+            self.max_episode_steps = 1000
+
         cfg.agent.params.obs_dim = self.env.observation_space.shape[0]
         cfg.agent.params.action_dim = self.env.action_space.shape[0]
         cfg.agent.params.action_range = [
@@ -162,7 +168,7 @@ class Workspace(object):
             next_obs, reward, done, extra = self.env.step(action)      
             # allow infinite bootstrap
             done = float(done)
-            done_no_max = 0 if episode_step + 1 == self.env._max_episode_steps else done
+            done_no_max = 0 if episode_step + 1 == self.max_episode_steps else done
             episode_reward += reward
             
             if self.log_success:

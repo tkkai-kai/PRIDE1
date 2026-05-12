@@ -24,7 +24,15 @@ def make(
     # shorten episode length
     max_episode_steps = (episode_length + frame_skip - 1) // frame_skip
 
-    if not env_id in gym.envs.registry.env_specs:
+    registry = gym.envs.registry
+    # Gym API compatibility: older versions expose `env_specs`,
+    # newer versions use dict-like `registry` directly.
+    if hasattr(registry, "env_specs"):
+        registered = env_id in registry.env_specs
+    else:
+        registered = env_id in registry
+
+    if not registered:
         task_kwargs = {}
         if seed is not None:
             task_kwargs['random'] = seed
@@ -46,6 +54,5 @@ def make(
                 frame_skip=frame_skip,
                 channels_first=channels_first,
             ),
-            max_episode_steps=max_episode_steps,
         )
     return gym.make(env_id)

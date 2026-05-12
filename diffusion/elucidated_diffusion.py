@@ -571,7 +571,11 @@ class REDQTrainer(Trainer):
             actions_np = actions.cpu().numpy() if actions.is_cuda else actions.numpy()
             rewards_np = rewards.cpu().numpy() if rewards.is_cuda else rewards.numpy()
             next_obs_np = next_obs.cpu().numpy() if next_obs.is_cuda else next_obs.numpy()
-            done_np = (1 - not_done_no_max).cpu().numpy() if done.is_cuda else done.numpy()
+            done_np = (
+                (1 - not_done_no_max).cpu().numpy()
+                if not_done_no_max.is_cuda
+                else (1 - not_done_no_max).numpy()
+            )
 
             data = [obs_np, actions_np, rewards_np, next_obs_np]
             if self.model_terminals:

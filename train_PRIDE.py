@@ -45,6 +45,12 @@ class Workspace(object):
             self.log_success = True
         else:
             self.env = utils.make_env(cfg)
+
+        self.max_episode_steps = getattr(self.env, "_max_episode_steps", None)
+        if self.max_episode_steps is None and getattr(self.env, "spec", None) is not None:
+            self.max_episode_steps = getattr(self.env.spec, "max_episode_steps", None)
+        if self.max_episode_steps is None:
+            self.max_episode_steps = 1000
         
         cfg.agent.params.obs_dim = self.env.observation_space.shape[0]
         cfg.agent.params.action_dim = self.env.action_space.shape[0]
@@ -88,6 +94,7 @@ class Workspace(object):
             teacher_eps_mistake=cfg.teacher_eps_mistake, 
             teacher_eps_skip=cfg.teacher_eps_skip, 
             teacher_eps_equal=cfg.teacher_eps_equal)
+            
         
     def evaluate(self):
         average_episode_reward = 0
@@ -329,14 +336,14 @@ class Workspace(object):
                 self.reward_model.change_batch(frac)
                 
                 # update margin --> not necessary / will be updated soon
-                new_margin = np.mean(avg_train_true_return) * (self.cfg.segment / self.env._max_episode_steps)
+                new_margin = np.mean(avg_train_true_return) * (self.cfg.segment / self.max_episode_steps)
                 self.reward_model.set_teacher_thres_skip(new_margin)
                 self.reward_model.set_teacher_thres_equal(new_margin)
                 
                 # first learn reward
                 self.learn_reward(first_flag=1)
                 
-                # relabel buffer
+                # relabel buffer    
                 self.replay_buffer.relabel_with_predictor(self.reward_model)
                 
                 # reset Q due to unsuperivsed exploration
@@ -366,7 +373,7 @@ class Workspace(object):
                         self.reward_model.change_batch(frac)
                         
                         # update margin --> not necessary / will be updated soon
-                        new_margin = np.mean(avg_train_true_return) * (self.cfg.segment / self.env._max_episode_steps)
+                        new_margin = np.mean(avg_train_true_return) * (self.cfg.segment / self.max_episode_steps)
                         self.reward_model.set_teacher_thres_skip(new_margin * self.cfg.teacher_eps_skip)
                         self.reward_model.set_teacher_thres_equal(new_margin * self.cfg.teacher_eps_equal)
                         
@@ -390,7 +397,7 @@ class Workspace(object):
 
             # allow infinite bootstrap
             done = float(done)
-            done_no_max = 0 if episode_step + 1 == self.env._max_episode_steps else done
+            done_no_max = 0 if episode_step + 1 == self.max_episode_steps else done
             episode_reward += reward_hat
             true_episode_reward += reward
             
@@ -411,7 +418,7 @@ class Workspace(object):
         # self.agent.save(self.work_dir, self.step)
         # self.reward_model.save(self.work_dir, self.step)
         
-@hydra.main(config_path='config/train_PEBwSyn.yaml', strict=True)
+@hydra.main(config_path='config/train_PRIDE.yaml', strict=True)
 def main(cfg):
     workspace = Workspace(cfg)
     workspace.run()

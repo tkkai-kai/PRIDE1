@@ -129,7 +129,12 @@ def _maybe_register_license(path=None):
       _REGISTERED = True
       # Internal analytics of mj_activate.
     elif result == 0:
-      raise Error("Could not register license.")
+      # Newer/open-source MuJoCo setups may not use mjkey activation.
+      # Keep compatibility with legacy behavior while allowing execution.
+      logging.warning(
+          "MuJoCo license activation failed at %s; continuing without "
+          "explicit activation.", path)
+      _REGISTERED = True
     else:
       raise Error("Unknown registration error (code: {})".format(result))
 

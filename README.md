@@ -8,12 +8,12 @@ This project is implemented based on [B-Pref](https://github.com/rll-research/BP
 ```
 conda env create -f conda_env.yml
 pip install -e .[docs,tests,extra]
-cd custom_dmcontrol
-pip install -e .
+pip install dm_control
 cd custom_dmc2gym
 pip install -e .
-pip install git+https://github.com/rlworkgroup/metaworld.git@master#egg=metaworld
+pip install git+https://github.com/rlworkgroup/metaworld.git@v2.0.0#egg=metaworld
 pip install pybullet
+pip install torchdiffeq
 ```
 
 ## Run experiments on irrational teacher

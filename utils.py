@@ -8,6 +8,7 @@ import math
 import dmc2gym
 import metaworld
 import metaworld.envs.mujoco.env_dict as _env_dict
+from typing import TYPE_CHECKING
 
 from collections import deque
 from gym.wrappers.time_limit import TimeLimit
@@ -16,6 +17,9 @@ from collections import deque
 from skimage.util.shape import view_as_windows
 from torch import nn
 from torch import distributions as pyd
+
+if TYPE_CHECKING:
+    from replay_buffer import ReplayBuffer
     
 def make_env(cfg):
     """Helper function to create dm_control environment"""
@@ -270,7 +274,7 @@ def to_np(t):
 
 # Make transition dataset from REDQ replay buffer.
 def make_inputs_from_replay_buffer(
-        replay_buffer: ReplayBuffer,
+        replay_buffer: "ReplayBuffer",
         model_terminals: bool = False,
 ) -> np.ndarray:
     ptr_location = replay_buffer.idx
