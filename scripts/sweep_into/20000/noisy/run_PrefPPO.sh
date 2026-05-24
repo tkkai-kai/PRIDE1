@@ -1,3 +1,4 @@
+#!/bin/bash
 for seed in 12345 23451 34512 45123 51234 67890 78906 89067 90678 6789; do
     for seg in 25 50; do
         for env in 32 64; do
