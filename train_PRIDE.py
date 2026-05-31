@@ -93,7 +93,9 @@ class Workspace(object):
             teacher_gamma=cfg.teacher_gamma, 
             teacher_eps_mistake=cfg.teacher_eps_mistake, 
             teacher_eps_skip=cfg.teacher_eps_skip, 
-            teacher_eps_equal=cfg.teacher_eps_equal)
+            teacher_eps_equal=cfg.teacher_eps_equal,
+            use_synthetic_reward_data=cfg.use_synthetic_reward_data,
+            synthetic_reward_ratio=cfg.synthetic_reward_ratio)
             
         
     def evaluate(self):
@@ -239,6 +241,13 @@ class Workspace(object):
                         skip_dims=skip_dims,
                         disable_terminal_norm=self.cfg.model_terminals,  # No terminals in DMC(False), OpenAI(True)
                     ),
+                    # diffusion trainer arguments
+                    train_batch_size=self.cfg.train_batch_size,
+                    train_lr=self.cfg.train_lr,
+                    lr_scheduler=self.cfg.lr_scheduler,
+                    train_num_steps=self.cfg.train_num_steps,
+                    save_and_sample_every=self.cfg.save_and_sample_every,
+                    weight_decay=self.cfg.weight_decay,
                     results_folder=self.work_dir,
                     model_terminals=self.cfg.model_terminals,
                 )
@@ -247,11 +256,53 @@ class Workspace(object):
                 self.reset_diffusion_buffer()
 
                 # Add samples to agent replay buffer
-                generator = SimpleDiffusionGenerator(self.cfg, env=self.env, ema_model=diffusion_trainer.ema.ema_model)
+                generator = SimpleDiffusionGenerator(
+                    self.cfg,
+                    env=self.env,
+                    ema_model=diffusion_trainer.ema.ema_model,
+                    sample_batch_size=min(100000, int(self.cfg.num_samples)),
+                )
                 observations, actions, rewards, next_observations, terminals = generator.sample(num_samples=self.cfg.num_samples)
-
+                # print(f'Diffusion Observations: {observations.shape}, Actions: {actions.shape}, Rewards: {rewards.shape}, Next Observations: {next_observations.shape}, Terminals: {terminals.shape}')
+                # print(f'Diffusion Observations: {observations[0]}, Actions: {actions[0]}, Rewards: {rewards[0]}, Next Observations: {next_observations[0]}, Terminals: {terminals[0]}')
+                # Debug terminal behavior: check whether sampled terminals are continuous.
+                terminals_float = np.asarray(terminals, dtype=np.float32).reshape(-1)
+                terminal_threshold = float(getattr(self.cfg, "terminal_threshold", 0.5))
+                continuous_mask = (terminals_float > 1e-6) & (terminals_float < 1.0 - 1e-6)
+                done_binary = (terminals_float > terminal_threshold).astype(np.float32)
+                print(
+                    f"Diffusion Terminals stats: min={terminals_float.min():.4f}, "
+                    f"max={terminals_float.max():.4f}, mean={terminals_float.mean():.4f}, "
+                    f"std={terminals_float.std():.4f}"
+                )
+                print(
+                    f"Diffusion Terminals debug: continuous_ratio={continuous_mask.mean():.4f}, "
+                    f"binary_done_ratio@{terminal_threshold}={done_binary.mean():.4f}, "
+                    f"sample={terminals_float[:10]}"
+                )
+                # add sample to reward model's self inputs and targets
                 print(f'Adding {self.cfg.num_samples} samples to replay buffer.')
-                for o, a, r, o2, term in zip(observations, actions, rewards, next_observations, terminals):
+                synthetic_chunk_size = int(getattr(self.cfg, "synthetic_chunk_size", 2000))
+                total_synthetic = len(terminals)
+                for idx, (o, a, r, o2, term) in enumerate(zip(observations, actions, rewards, next_observations, terminals)):
+                    # Match the per-step types used by add_data(obs, action, reward, done).
+                    o = np.asarray(o, dtype=np.float32)
+                    a = np.asarray(a, dtype=np.float32)
+                    r = float(np.asarray(r).item())
+                    done = float(np.asarray(term).item())
+                    # Only store synthetic trajectories when enabled by config.
+                    if self.cfg.use_synthetic_reward_data:
+                        # When model_terminals is disabled, sampled terminals are all zero.
+                        # Force-close synthetic trajectories every fixed chunk to avoid one
+                        # unbounded trajectory growing forever in reward-model storage.
+                        synthetic_done = done
+                        if (not self.cfg.model_terminals) and synthetic_chunk_size > 0:
+                            is_chunk_end = ((idx + 1) % synthetic_chunk_size) == 0
+                            is_last = (idx + 1) == total_synthetic
+                            synthetic_done = float(is_chunk_end or is_last)
+                        self.reward_model.add_data(
+                            o, a, r, synthetic_done, synthetic=True
+                        )
                     self.diffusion_replay_buffer.add(o, a, r, o2, term, term)
 
                 if self.cfg.print_buffer_stats:
@@ -406,6 +457,8 @@ class Workspace(object):
                 
             # adding data to the reward training data
             self.reward_model.add_data(obs, action, reward, done)
+            # print(f'Adding data to replay buffer: {obs.shape}, {action.shape}, {reward_hat.shape}, {next_obs.shape}, {done}, {done_no_max}')
+            # print(f'obs: {obs[0]}, action: {action[0]}, reward_hat: {reward_hat}, next_obs: {next_obs[0]}, done: {done}, done_no_max: {done_no_max}')
             self.replay_buffer.add(
                 obs, action, reward_hat, 
                 next_obs, done, done_no_max)

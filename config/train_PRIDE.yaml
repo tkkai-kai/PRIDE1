@@ -14,6 +14,7 @@ skip_reward_norm: True
 normalizer_type: 'standard'
 
 model_terminals: False  # No terminals in DMC(False), OpenAI(True)
+terminal_threshold: 0.5
 num_samples: 200000
 print_buffer_stats: true
 diffusion_start: 0
@@ -54,6 +55,9 @@ reward_update: 200
 feed_type: 0
 reset_update: 100
 topK: 5
+use_synthetic_reward_data: false
+synthetic_reward_ratio: 0.5
+synthetic_chunk_size: 2000
 ensemble_size: 3
 max_feedback: 1400
 large_batch: 10

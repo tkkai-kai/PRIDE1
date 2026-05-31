@@ -7,7 +7,7 @@
 # (Slurm copies this script to spool; paths are resolved from SLURM_SUBMIT_DIR.)
 # IMPORTANT: All #SBATCH lines must come before any shell assignments (Slurm stops parsing there).
 
-#SBATCH --job-name=pride_qw_oracle
+#SBATCH --job-name=pride_qw_oracle_syn
 #SBATCH --output=slurm_output/slurm-%j.out
 #SBATCH --error=slurm_output/slurm-%j.err
 # Set --mail-user to an address Slurm can reach (see `man sbatch` / cluster docs).
@@ -78,5 +78,5 @@ export PRIDE_DEVICE="${PRIDE_DEVICE:-cuda}"
 
 #for seed in 12345 23451 34512 45123 51234 67890 78906 89067 90678 6789; do
 for seed in 12345; do
-    python train_PRIDE.py env=quadruped_walk seed="${seed}" "device=${PRIDE_DEVICE}" agent.params.actor_lr=0.0001 agent.params.critic_lr=0.0001 gradient_update=1 activation=tanh num_unsup_steps=9000 num_train_steps=1000000 num_interact=30000 max_feedback=2000 reward_batch=200 reward_update=50 feed_type="${FEED_TYPE}" teacher_beta=-1 teacher_gamma=1 teacher_eps_mistake=0 teacher_eps_skip=0 teacher_eps_equal=0 retrain_diffusion_every=5000 hydra.run.dir="outputs/pride_${RUN_ID}_seed${seed}"
+    python train_PRIDE.py env=quadruped_walk seed="${seed}" "device=${PRIDE_DEVICE}" agent.params.actor_lr=0.0001 agent.params.critic_lr=0.0001 gradient_update=1 activation=tanh num_unsup_steps=9000 num_train_steps=1000000 num_interact=30000 max_feedback=2000 reward_batch=200 reward_update=50 feed_type="${FEED_TYPE}" teacher_beta=-1 teacher_gamma=1 teacher_eps_mistake=0 teacher_eps_skip=0 teacher_eps_equal=0 retrain_diffusion_every=5000 use_synthetic_reward_data=true synthetic_reward_ratio=0.5 synthetic_chunk_size=2000 model_terminals=false hydra.run.dir="outputs/pride_${RUN_ID}_seed${seed}"
 done

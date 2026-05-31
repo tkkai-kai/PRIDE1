@@ -6,8 +6,6 @@ import os
 import random
 import math
 import dmc2gym
-import metaworld
-import metaworld.envs.mujoco.env_dict as _env_dict
 from typing import TYPE_CHECKING
 
 from collections import deque
@@ -17,6 +15,19 @@ from collections import deque
 from skimage.util.shape import view_as_windows
 from torch import nn
 from torch import distributions as pyd
+
+# Metaworld pulls in mujoco_py and legacy MuJoCo (~/.mujoco/mujoco210). Only load when needed.
+_metaworld_env_dict = None
+
+
+def _get_metaworld_env_dict():
+    global _metaworld_env_dict
+    if _metaworld_env_dict is None:
+        import metaworld.envs.mujoco.env_dict as env_dict_module
+
+        _metaworld_env_dict = env_dict_module
+    return _metaworld_env_dict
+
 
 if TYPE_CHECKING:
     from replay_buffer import ReplayBuffer
@@ -65,6 +76,7 @@ def tie_weights(src, trg):
     trg.bias = src.bias
     
 def make_metaworld_env(cfg):
+    _env_dict = _get_metaworld_env_dict()
     env_name = cfg.env.replace('metaworld_','')
     if env_name in _env_dict.ALL_V2_ENVIRONMENTS:
         env_cls = _env_dict.ALL_V2_ENVIRONMENTS[env_name]
@@ -80,6 +92,7 @@ def make_metaworld_env(cfg):
     return TimeLimit(NormalizedBoxEnv(env), env.max_path_length)
 
 def ppo_make_metaworld_env(env_id, seed):
+    _env_dict = _get_metaworld_env_dict()
     env_name = env_id.replace('metaworld_','')
     if env_name in _env_dict.ALL_V2_ENVIRONMENTS:
         env_cls = _env_dict.ALL_V2_ENVIRONMENTS[env_name]

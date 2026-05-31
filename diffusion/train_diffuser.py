@@ -53,7 +53,8 @@ class SimpleDiffusionGenerator:
             sampled_outputs = sampled_outputs.cpu().numpy()
 
             # Split samples into (s, a, r, s') format
-            transitions = split_diffusion_samples(sampled_outputs, self.env, self.cfg.model_terminals)
+            # terminal threshold is 5, is according to binary_done_ratio@0.5 ~0.14
+            transitions = split_diffusion_samples(sampled_outputs, self.env, self.cfg.model_terminals, terminal_threshold=0.5)
             if len(transitions) == 4:
                 obs, act, rew, next_obs = transitions
                 terminal = np.zeros_like(next_obs[:, 0])
