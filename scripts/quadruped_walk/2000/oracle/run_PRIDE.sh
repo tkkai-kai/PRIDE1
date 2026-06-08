@@ -7,6 +7,5 @@ RUN_ID="${SLURM_JOB_ID:-local_$(date +%Y%m%d_%H%M%S)}"
 mkdir -p "${OUTPUT_ROOT}"
 #for seed in 12345 23451 34512 45123 51234 67890 78906 89067 90678 6789; do
 for seed in 12345; do
-
     python train_PRIDE.py env=quadruped_walk seed=$seed "device=${PRIDE_DEVICE}" agent.params.actor_lr=0.0001 agent.params.critic_lr=0.0001 gradient_update=1 activation=tanh num_unsup_steps=9000 num_train_steps=1000000 num_interact=30000 max_feedback=2000 reward_batch=200 reward_update=50 feed_type="${FEED_TYPE}" teacher_beta=-1 teacher_gamma=1 teacher_eps_mistake=0 teacher_eps_skip=0 teacher_eps_equal=0 retrain_diffusion_every=2000 hydra.run.dir="${OUTPUT_ROOT}/pride_${RUN_ID}_seed${seed}"
 done

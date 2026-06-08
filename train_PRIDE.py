@@ -96,6 +96,12 @@ class Workspace(object):
             teacher_eps_equal=cfg.teacher_eps_equal,
             use_synthetic_reward_data=cfg.use_synthetic_reward_data,
             synthetic_reward_ratio=cfg.synthetic_reward_ratio)
+
+    def _log_time(self, stage, start_time, **metrics):
+        elapsed_ms = (time.perf_counter() - start_time) * 1000.0
+        metrics_str = " ".join([f"{k}={v}" for k, v in metrics.items()])
+        suffix = f" | {metrics_str}" if metrics_str else ""
+        print(f"[TIME][PRIDE] {stage} {elapsed_ms:.2f}ms{suffix}")
             
         
     def evaluate(self):
@@ -145,25 +151,40 @@ class Workspace(object):
         self.logger.dump(self.step)
     
     def learn_reward(self, first_flag=0):
+        learn_reward_start = time.perf_counter()
                 
         # get feedbacks
         labeled_queries, noisy_queries = 0, 0
         if first_flag == 1:
             # if it is first time to get feedback, need to use random sampling
+            sample_start = time.perf_counter()
             labeled_queries = self.reward_model.uniform_sampling()
+            print(f"[TIME][PRIDE] learn_reward.sampling {((time.perf_counter() - sample_start) * 1000.0):.2f}ms | strategy=uniform_first")
         else:
             if self.cfg.feed_type == 0:
+                sample_start = time.perf_counter()
                 labeled_queries = self.reward_model.uniform_sampling()
+                print(f"[TIME][PRIDE] learn_reward.sampling {((time.perf_counter() - sample_start) * 1000.0):.2f}ms | strategy=uniform")
             elif self.cfg.feed_type == 1:
+                sample_start = time.perf_counter()
                 labeled_queries = self.reward_model.disagreement_sampling()
+                print(f"[TIME][PRIDE] learn_reward.sampling {((time.perf_counter() - sample_start) * 1000.0):.2f}ms | strategy=disagreement")
             elif self.cfg.feed_type == 2:
+                sample_start = time.perf_counter()
                 labeled_queries = self.reward_model.entropy_sampling()
+                print(f"[TIME][PRIDE] learn_reward.sampling {((time.perf_counter() - sample_start) * 1000.0):.2f}ms | strategy=entropy")
             elif self.cfg.feed_type == 3:
+                sample_start = time.perf_counter()
                 labeled_queries = self.reward_model.kcenter_sampling()
+                print(f"[TIME][PRIDE] learn_reward.sampling {((time.perf_counter() - sample_start) * 1000.0):.2f}ms | strategy=kcenter")
             elif self.cfg.feed_type == 4:
+                sample_start = time.perf_counter()
                 labeled_queries = self.reward_model.kcenter_disagree_sampling()
+                print(f"[TIME][PRIDE] learn_reward.sampling {((time.perf_counter() - sample_start) * 1000.0):.2f}ms | strategy=kcenter_disagree")
             elif self.cfg.feed_type == 5:
+                sample_start = time.perf_counter()
                 labeled_queries = self.reward_model.kcenter_entropy_sampling()
+                print(f"[TIME][PRIDE] learn_reward.sampling {((time.perf_counter() - sample_start) * 1000.0):.2f}ms | strategy=kcenter_entropy")
             else:
                 raise NotImplementedError
         
@@ -174,16 +195,22 @@ class Workspace(object):
         if self.labeled_feedback > 0:
             # update reward
             for epoch in range(self.cfg.reward_update):
+                train_start = time.perf_counter()
                 if self.cfg.label_margin > 0 or self.cfg.teacher_eps_equal > 0:
                     train_acc = self.reward_model.train_soft_reward()
                 else:
                     train_acc = self.reward_model.train_reward()
+                print(f"[TIME][PRIDE] learn_reward.train_epoch {((time.perf_counter() - train_start) * 1000.0):.2f}ms | epoch={epoch}")
                 total_acc = np.mean(train_acc)
                 
                 if total_acc > 0.97:
                     break;
                     
         print("Reward function is updated!! ACC: " + str(total_acc))
+        print(
+            f"[TIME][PRIDE] learn_reward.total {((time.perf_counter() - learn_reward_start) * 1000.0):.2f}ms "
+            f"| labeled_queries={labeled_queries} labeled_feedback={self.labeled_feedback}"
+        )
 
 
     def reset_diffusion_buffer(self):
@@ -230,9 +257,10 @@ class Workspace(object):
             ################ diffusion model ##########################
             ###########################################################
             if (self.step + 1) % retrain_diffusion_step == 0 and (self.step + 1) >= self.cfg.diffusion_start and self.step + 1 < self.cfg.num_train_steps:
+                diffusion_total_start = time.perf_counter()
                 print(f'Retraining diffusion model at step {self.step + 1}')
 
-                # Train new diffusion model
+                construct_start = time.perf_counter()
                 diffusion_trainer = REDQTrainer(
                     self.cfg,
                     construct_diffusion_model(
@@ -251,11 +279,29 @@ class Workspace(object):
                     results_folder=self.work_dir,
                     model_terminals=self.cfg.model_terminals,
                 )
-                diffusion_trainer.update_normalizer(self.replay_buffer, device=self.device)
-                diffusion_trainer.train_from_redq_buffer(self.replay_buffer)
-                self.reset_diffusion_buffer()
+                self._log_time(
+                    "diffusion_retrain.construct",
+                    construct_start,
+                    train_num_steps=self.cfg.train_num_steps,
+                )
 
-                # Add samples to agent replay buffer
+                normalizer_start = time.perf_counter()
+                diffusion_trainer.update_normalizer(self.replay_buffer, device=self.device)
+                self._log_time("diffusion_retrain.update_normalizer", normalizer_start)
+
+                train_start = time.perf_counter()
+                diffusion_trainer.train_from_redq_buffer(self.replay_buffer)
+                self._log_time(
+                    "diffusion_retrain.train",
+                    train_start,
+                    train_num_steps=self.cfg.train_num_steps,
+                )
+
+                reset_start = time.perf_counter()
+                self.reset_diffusion_buffer()
+                self._log_time("diffusion_retrain.reset_buffer", reset_start)
+
+                sample_start = time.perf_counter()
                 generator = SimpleDiffusionGenerator(
                     self.cfg,
                     env=self.env,
@@ -263,6 +309,12 @@ class Workspace(object):
                     sample_batch_size=min(100000, int(self.cfg.num_samples)),
                 )
                 observations, actions, rewards, next_observations, terminals = generator.sample(num_samples=self.cfg.num_samples)
+                self._log_time(
+                    "diffusion_retrain.sample",
+                    sample_start,
+                    num_samples=self.cfg.num_samples,
+                    num_sample_steps=self.cfg.num_sample_steps,
+                )
                 # print(f'Diffusion Observations: {observations.shape}, Actions: {actions.shape}, Rewards: {rewards.shape}, Next Observations: {next_observations.shape}, Terminals: {terminals.shape}')
                 # print(f'Diffusion Observations: {observations[0]}, Actions: {actions[0]}, Rewards: {rewards[0]}, Next Observations: {next_observations[0]}, Terminals: {terminals[0]}')
                 # Debug terminal behavior: check whether sampled terminals are continuous.
@@ -282,6 +334,7 @@ class Workspace(object):
                 )
                 # add sample to reward model's self inputs and targets
                 print(f'Adding {self.cfg.num_samples} samples to replay buffer.')
+                integrate_start = time.perf_counter()
                 synthetic_chunk_size = int(getattr(self.cfg, "synthetic_chunk_size", 2000))
                 total_synthetic = len(terminals)
                 for idx, (o, a, r, o2, term) in enumerate(zip(observations, actions, rewards, next_observations, terminals)):
@@ -303,7 +356,23 @@ class Workspace(object):
                         self.reward_model.add_data(
                             o, a, r, synthetic_done, synthetic=True
                         )
-                    self.diffusion_replay_buffer.add(o, a, r, o2, term, term)
+                    # relabel difussion buffer with reward model
+                    sa = np.concatenate([o, a], axis=-1)
+                    r_hat = self.reward_model.r_hat(sa)
+                    self.diffusion_replay_buffer.add(o, a, r_hat, o2, term, term)
+
+                self._log_time(
+                    "diffusion_retrain.integrate_samples",
+                    integrate_start,
+                    num_samples=total_synthetic,
+                    use_synthetic=self.cfg.use_synthetic_reward_data,
+                )
+                self._log_time(
+                    "diffusion_retrain.total",
+                    diffusion_total_start,
+                    step=self.step + 1,
+                    retrain_every=retrain_diffusion_step,
+                )
 
                 if self.cfg.print_buffer_stats:
                     ptr_location = self.replay_buffer.idx
@@ -397,6 +466,9 @@ class Workspace(object):
                 # relabel buffer    
                 self.replay_buffer.relabel_with_predictor(self.reward_model)
                 
+                if self.diffusion_replay_buffer.idx > 0:
+                    self.diffusion_replay_buffer.relabel_with_predictor(self.reward_model)
+
                 # reset Q due to unsuperivsed exploration
                 self.agent.reset_critic()
                 
@@ -433,7 +505,11 @@ class Workspace(object):
                             self.reward_model.set_batch(self.cfg.max_feedback - self.total_feedback)
                             
                         self.learn_reward()
+                        # relabel reward model's self inputs and targets
                         self.replay_buffer.relabel_with_predictor(self.reward_model)
+                        # relabel difussion buffer with reward model
+                        if self.diffusion_replay_buffer.idx > 0:
+                            self.diffusion_replay_buffer.relabel_with_predictor(self.reward_model)
                         interact_count = 0
                         
                 self.agent.update(self.replay_buffer, self.logger, self.step, 1, True, self.diffusion_replay_buffer, self.cfg.diffusion_sample_ratio)
