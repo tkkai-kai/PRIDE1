@@ -1,6 +1,7 @@
 # Train diffusion model on D4RL transitions.
 import argparse
 import pathlib
+import time
 
 # import d4rl
 import gym
@@ -38,12 +39,14 @@ class SimpleDiffusionGenerator:
     ) -> (np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray):
         assert num_samples % self.sample_batch_size == 0, 'num_samples must be a multiple of sample_batch_size'
         num_batches = num_samples // self.sample_batch_size
+        sample_total_start = time.perf_counter()
         observations = []
         actions = []
         rewards = []
         next_observations = []
         terminals = []
         for i in range(num_batches):
+            batch_start = time.perf_counter()
             print(f'Generating split {i + 1} of {num_batches}')
             sampled_outputs = self.diffusion.sample(
                 batch_size=self.sample_batch_size,
@@ -65,12 +68,23 @@ class SimpleDiffusionGenerator:
             rewards.append(rew)
             next_observations.append(next_obs)
             terminals.append(terminal)
+            batch_ms = (time.perf_counter() - batch_start) * 1000.0
+            print(
+                f"[TIME][Diffusion] sample.batch {batch_ms:.2f}ms "
+                f"| batch={i + 1}/{num_batches} batch_size={self.sample_batch_size}"
+            )
         observations = np.concatenate(observations, axis=0)
         actions = np.concatenate(actions, axis=0)
         rewards = np.concatenate(rewards, axis=0)
         next_observations = np.concatenate(next_observations, axis=0)
         terminals = np.concatenate(terminals, axis=0)
 
+        total_ms = (time.perf_counter() - sample_total_start) * 1000.0
+        print(
+            f"[TIME][Diffusion] sample.total {total_ms:.2f}ms "
+            f"| num_samples={num_samples} num_batches={num_batches} "
+            f"num_sample_steps={self.num_sample_steps}"
+        )
         return observations, actions, rewards, next_observations, terminals
 
 

@@ -32,6 +32,7 @@ def gen_net(in_size=1, out_size=1, H=128, n_layers=3, activation='tanh'):
     return net
 
 def KCenterGreedy(obs, full_obs, num_new_sample):
+    kcenter_start = time.perf_counter()
     selected_index = []
     current_index = list(range(obs.shape[0]))
     new_obs = obs
@@ -53,9 +54,15 @@ def KCenterGreedy(obs, full_obs, num_new_sample):
             full_obs, 
             obs[selected_index]], 
             axis=0)
+    elapsed_ms = (time.perf_counter() - kcenter_start) * 1000.0
+    print(
+        f"[TIME][RewardModel] KCenterGreedy {elapsed_ms:.2f}ms | "
+        f"obs={obs.shape[0]} full_obs={full_obs.shape[0]} selected={num_new_sample}"
+    )
     return selected_index
 
 def compute_smallest_dist(obs, full_obs):
+    dist_start = time.perf_counter()
     obs = torch.from_numpy(obs).float()
     full_obs = torch.from_numpy(full_obs).float()
     batch_size = 100
@@ -79,6 +86,11 @@ def compute_smallest_dist(obs, full_obs):
                 total_dists.append(small_dists)
                 
         total_dists = torch.cat(total_dists)
+    elapsed_ms = (time.perf_counter() - dist_start) * 1000.0
+    print(
+        f"[TIME][RewardModel] compute_smallest_dist {elapsed_ms:.2f}ms | "
+        f"obs={len(obs)} full_obs={len(full_obs)}"
+    )
     return total_dists.unsqueeze(1)
 
 class RewardModel:
@@ -146,6 +158,12 @@ class RewardModel:
         
         self.label_margin = label_margin
         self.label_target = 1 - 2*self.label_margin
+
+    def _log_time(self, stage, start_time, **metrics):
+        elapsed_ms = (time.perf_counter() - start_time) * 1000.0
+        metrics_str = " ".join([f"{k}={v}" for k, v in metrics.items()])
+        suffix = f" | {metrics_str}" if metrics_str else ""
+        print(f"[TIME][RewardModel] {stage} {elapsed_ms:.2f}ms{suffix}")
     
     def softXEnt_loss(self, input, target):
         logprobs = torch.nn.functional.log_softmax (input, dim = 1)
@@ -340,6 +358,7 @@ class RewardModel:
         return np.mean(ensemble_acc)
 
     def _get_queries_from_inputs(self, data_inputs, data_targets, mb_size=20):
+        total_start = time.perf_counter()
         if mb_size == 0:
             empty_inputs = np.empty((0, self.size_segment, self.ds + self.da), dtype=np.float32)
             empty_targets = np.empty((0, self.size_segment, 1), dtype=np.float32)
@@ -383,36 +402,60 @@ class RewardModel:
 
         sa_t_1, r_t_1 = sample_segments()
         sa_t_2, r_t_2 = sample_segments()
+        self._log_time(
+            "_get_queries_from_inputs",
+            total_start,
+            mb_size=mb_size,
+            valid_pairs=len(valid_pairs),
+            segment_len=self.size_segment,
+        )
         return sa_t_1, sa_t_2, r_t_1, r_t_2
 
+
     def get_queries(self, mb_size=20, synthetic=None, synthetic_ratio=None):
+        total_start = time.perf_counter()
         if synthetic is None:
             synthetic = self.use_synthetic_reward_data
-            if synthetic_ratio is None:
-                synthetic_ratio = 0.5
-            else:
-                synthetic_ratio = self.synthetic_reward_ratio
+        if synthetic_ratio is None:
+            synthetic_ratio = self.synthetic_reward_ratio
 
         if not synthetic:
-            return self._get_queries_from_inputs(self.inputs, self.targets, mb_size)
+            outputs = self._get_queries_from_inputs(self.inputs, self.targets, mb_size)
+            self._log_time("get_queries", total_start, synthetic=False, mb_size=mb_size)
+            return outputs
 
         # synthetic_ratio = min(max(float(synthetic_ratio), 0.0), 1.0)
         num_synthetic = int(mb_size * synthetic_ratio)
         num_real = mb_size - num_synthetic
         print(f"num_real: {num_real}, num_synthetic: {num_synthetic}")
         # adding synthetic data to the inputs
+        real_start = time.perf_counter()
         real_sa_t_1, real_sa_t_2, real_r_t_1, real_r_t_2 = self._get_queries_from_inputs(self.inputs, self.targets, num_real)
+        self._log_time("get_queries.real", real_start, num_real=num_real)
         try:
+            syn_start = time.perf_counter()
             syn_sa_t_1, syn_sa_t_2, syn_r_t_1, syn_r_t_2 = self._get_queries_from_inputs(self.syn_inputs, self.syn_targets, num_synthetic)
+            self._log_time("get_queries.synthetic", syn_start, num_synthetic=num_synthetic, fallback=False)
         except ValueError:
+            syn_start = time.perf_counter()
             syn_sa_t_1, syn_sa_t_2, syn_r_t_1, syn_r_t_2 = self._get_queries_from_inputs(self.inputs, self.targets, num_synthetic)
+            self._log_time("get_queries.synthetic", syn_start, num_synthetic=num_synthetic, fallback=True)
         sa_t_1 = np.concatenate([real_sa_t_1, syn_sa_t_1], axis=0)
         sa_t_2 = np.concatenate([real_sa_t_2, syn_sa_t_2], axis=0)
         r_t_1 = np.concatenate([real_r_t_1, syn_r_t_1], axis=0)
         r_t_2 = np.concatenate([real_r_t_2, syn_r_t_2], axis=0)
+        self._log_time(
+            "get_queries",
+            total_start,
+            synthetic=True,
+            num_real=num_real,
+            num_synthetic=num_synthetic,
+            mb_size=mb_size,
+        )
         return sa_t_1, sa_t_2, r_t_1, r_t_2
 
     def put_queries(self, sa_t_1, sa_t_2, labels):
+        put_start = time.perf_counter()
         total_sample = sa_t_1.shape[0]
         next_index = self.buffer_index + total_sample
         if next_index >= self.capacity:
@@ -434,8 +477,17 @@ class RewardModel:
             np.copyto(self.buffer_seg2[self.buffer_index:next_index], sa_t_2)
             np.copyto(self.buffer_label[self.buffer_index:next_index], labels)
             self.buffer_index = next_index
+        self._log_time(
+            "put_queries",
+            put_start,
+            inserted=total_sample,
+            buffer_index=self.buffer_index,
+            buffer_full=self.buffer_full,
+        )
             
     def get_label(self, sa_t_1, sa_t_2, r_t_1, r_t_2):
+        label_start = time.perf_counter()
+        input_count = sa_t_1.shape[0]
         sum_r_t_1 = np.sum(r_t_1, axis=1)
         sum_r_t_2 = np.sum(r_t_2, axis=1)
         
@@ -444,6 +496,7 @@ class RewardModel:
             max_r_t = np.maximum(sum_r_t_1, sum_r_t_2)
             max_index = (max_r_t > self.teacher_thres_skip).reshape(-1)
             if sum(max_index) == 0:
+                self._log_time("get_label", label_start, input_count=input_count, output_count=0, all_skipped=True)
                 return None, None, None, None, []
 
             sa_t_1 = sa_t_1[max_index]
@@ -484,15 +537,25 @@ class RewardModel:
  
         # equally preferable
         labels[margin_index] = -1 
+        self._log_time(
+            "get_label",
+            label_start,
+            input_count=input_count,
+            output_count=len(labels),
+            equal_count=int(np.sum(margin_index)),
+        )
         
         return sa_t_1, sa_t_2, r_t_1, r_t_2, labels
     
     def kcenter_sampling(self):
+        total_start = time.perf_counter()
         
         # get queries
         num_init = self.mb_size*self.large_batch
+        query_start = time.perf_counter()
         sa_t_1, sa_t_2, r_t_1, r_t_2 =  self.get_queries(
             mb_size=num_init)
+        self._log_time("kcenter_sampling.get_queries", query_start, num_init=num_init)
         
         # get final queries based on kmeans clustering
         temp_sa_t_1 = sa_t_1[:,:,:self.ds]
@@ -507,34 +570,44 @@ class RewardModel:
         tot_sa = np.concatenate([tot_sa_1.reshape(max_len, -1),  
                                  tot_sa_2.reshape(max_len, -1)], axis=1)
         
+        kcenter_start = time.perf_counter()
         selected_index = KCenterGreedy(temp_sa, tot_sa, self.mb_size)
+        self._log_time("kcenter_sampling.kcenter", kcenter_start, selected=self.mb_size)
 
         r_t_1, sa_t_1 = r_t_1[selected_index], sa_t_1[selected_index]
         r_t_2, sa_t_2 = r_t_2[selected_index], sa_t_2[selected_index]
         
         # get labels
+        label_start = time.perf_counter()
         sa_t_1, sa_t_2, r_t_1, r_t_2, labels = self.get_label(
             sa_t_1, sa_t_2, r_t_1, r_t_2)
+        self._log_time("kcenter_sampling.label", label_start, labeled=len(labels))
         
         if len(labels) > 0:
             self.put_queries(sa_t_1, sa_t_2, labels)
+        self._log_time("kcenter_sampling.total", total_start, labeled=len(labels))
         
         return len(labels)
     
     def kcenter_disagree_sampling(self):
+        total_start = time.perf_counter()
         
         num_init = self.mb_size*self.large_batch
         num_init_half = int(num_init*0.5)
         
         # get queries
+        query_start = time.perf_counter()
         sa_t_1, sa_t_2, r_t_1, r_t_2 =  self.get_queries(
             mb_size=num_init)
+        self._log_time("kcenter_disagree_sampling.get_queries", query_start, num_init=num_init)
         
         # get final queries based on uncertainty
+        uncertainty_start = time.perf_counter()
         _, disagree = self.get_rank_probability(sa_t_1, sa_t_2)
         top_k_index = (-disagree).argsort()[:num_init_half]
         r_t_1, sa_t_1 = r_t_1[top_k_index], sa_t_1[top_k_index]
         r_t_2, sa_t_2 = r_t_2[top_k_index], sa_t_2[top_k_index]
+        self._log_time("kcenter_disagree_sampling.uncertainty", uncertainty_start, top_k=num_init_half)
         
         # get final queries based on kmeans clustering
         temp_sa_t_1 = sa_t_1[:,:,:self.ds]
@@ -550,35 +623,45 @@ class RewardModel:
         tot_sa = np.concatenate([tot_sa_1.reshape(max_len, -1),  
                                  tot_sa_2.reshape(max_len, -1)], axis=1)
         
+        kcenter_start = time.perf_counter()
         selected_index = KCenterGreedy(temp_sa, tot_sa, self.mb_size)
+        self._log_time("kcenter_disagree_sampling.kcenter", kcenter_start, selected=self.mb_size)
         
         r_t_1, sa_t_1 = r_t_1[selected_index], sa_t_1[selected_index]
         r_t_2, sa_t_2 = r_t_2[selected_index], sa_t_2[selected_index]
 
         # get labels
+        label_start = time.perf_counter()
         sa_t_1, sa_t_2, r_t_1, r_t_2, labels = self.get_label(
             sa_t_1, sa_t_2, r_t_1, r_t_2)
+        self._log_time("kcenter_disagree_sampling.label", label_start, labeled=len(labels))
         
         if len(labels) > 0:
             self.put_queries(sa_t_1, sa_t_2, labels)
+        self._log_time("kcenter_disagree_sampling.total", total_start, labeled=len(labels))
         
         return len(labels)
     
     def kcenter_entropy_sampling(self):
+        total_start = time.perf_counter()
         
         num_init = self.mb_size*self.large_batch
         num_init_half = int(num_init*0.5)
         
         # get queries
+        query_start = time.perf_counter()
         sa_t_1, sa_t_2, r_t_1, r_t_2 =  self.get_queries(
             mb_size=num_init)
+        self._log_time("kcenter_entropy_sampling.get_queries", query_start, num_init=num_init)
         
         
         # get final queries based on uncertainty
+        uncertainty_start = time.perf_counter()
         entropy, _ = self.get_entropy(sa_t_1, sa_t_2)
         top_k_index = (-entropy).argsort()[:num_init_half]
         r_t_1, sa_t_1 = r_t_1[top_k_index], sa_t_1[top_k_index]
         r_t_2, sa_t_2 = r_t_2[top_k_index], sa_t_2[top_k_index]
+        self._log_time("kcenter_entropy_sampling.uncertainty", uncertainty_start, top_k=num_init_half)
         
         # get final queries based on kmeans clustering
         temp_sa_t_1 = sa_t_1[:,:,:self.ds]
@@ -594,77 +677,105 @@ class RewardModel:
         tot_sa = np.concatenate([tot_sa_1.reshape(max_len, -1),  
                                  tot_sa_2.reshape(max_len, -1)], axis=1)
         
+        kcenter_start = time.perf_counter()
         selected_index = KCenterGreedy(temp_sa, tot_sa, self.mb_size)
+        self._log_time("kcenter_entropy_sampling.kcenter", kcenter_start, selected=self.mb_size)
         
         r_t_1, sa_t_1 = r_t_1[selected_index], sa_t_1[selected_index]
         r_t_2, sa_t_2 = r_t_2[selected_index], sa_t_2[selected_index]
 
         # get labels
+        label_start = time.perf_counter()
         sa_t_1, sa_t_2, r_t_1, r_t_2, labels = self.get_label(
             sa_t_1, sa_t_2, r_t_1, r_t_2)
+        self._log_time("kcenter_entropy_sampling.label", label_start, labeled=len(labels))
         
         if len(labels) > 0:
             self.put_queries(sa_t_1, sa_t_2, labels)
+        self._log_time("kcenter_entropy_sampling.total", total_start, labeled=len(labels))
         
         return len(labels)
     
     def uniform_sampling(self):
+        total_start = time.perf_counter()
         # get queries
+        query_start = time.perf_counter()
         sa_t_1, sa_t_2, r_t_1, r_t_2 = self.get_queries(
             mb_size=self.mb_size)
+        self._log_time("uniform_sampling.get_queries", query_start, mb_size=self.mb_size)
             
         # get labels
+        label_start = time.perf_counter()
         sa_t_1, sa_t_2, r_t_1, r_t_2, labels = self.get_label(
             sa_t_1, sa_t_2, r_t_1, r_t_2)
+        self._log_time("uniform_sampling.label", label_start, labeled=len(labels))
         
         if len(labels) > 0:
             self.put_queries(sa_t_1, sa_t_2, labels)
+        self._log_time("uniform_sampling.total", total_start, labeled=len(labels))
         
         return len(labels)
     
     def disagreement_sampling(self):
+        total_start = time.perf_counter()
         
         # get queries
+        query_start = time.perf_counter()
         sa_t_1, sa_t_2, r_t_1, r_t_2 =  self.get_queries(
             mb_size=self.mb_size*self.large_batch)
+        self._log_time("disagreement_sampling.get_queries", query_start, candidate=self.mb_size*self.large_batch)
         
         # get final queries based on uncertainty
+        uncertainty_start = time.perf_counter()
         _, disagree = self.get_rank_probability(sa_t_1, sa_t_2)
         top_k_index = (-disagree).argsort()[:self.mb_size]
         r_t_1, sa_t_1 = r_t_1[top_k_index], sa_t_1[top_k_index]
         r_t_2, sa_t_2 = r_t_2[top_k_index], sa_t_2[top_k_index]        
+        self._log_time("disagreement_sampling.uncertainty", uncertainty_start, selected=self.mb_size)
         
         # get labels
+        label_start = time.perf_counter()
         sa_t_1, sa_t_2, r_t_1, r_t_2, labels = self.get_label(
             sa_t_1, sa_t_2, r_t_1, r_t_2)        
+        self._log_time("disagreement_sampling.label", label_start, labeled=len(labels))
         if len(labels) > 0:
             self.put_queries(sa_t_1, sa_t_2, labels)
+        self._log_time("disagreement_sampling.total", total_start, labeled=len(labels))
         
         return len(labels)
     
     def entropy_sampling(self):
+        total_start = time.perf_counter()
         
         # get queries
+        query_start = time.perf_counter()
         sa_t_1, sa_t_2, r_t_1, r_t_2 =  self.get_queries(
             mb_size=self.mb_size*self.large_batch)
+        self._log_time("entropy_sampling.get_queries", query_start, candidate=self.mb_size*self.large_batch)
         
         # get final queries based on uncertainty
+        uncertainty_start = time.perf_counter()
         entropy, _ = self.get_entropy(sa_t_1, sa_t_2)
         
         top_k_index = (-entropy).argsort()[:self.mb_size]
         r_t_1, sa_t_1 = r_t_1[top_k_index], sa_t_1[top_k_index]
         r_t_2, sa_t_2 = r_t_2[top_k_index], sa_t_2[top_k_index]
+        self._log_time("entropy_sampling.uncertainty", uncertainty_start, selected=self.mb_size)
         
         # get labels
+        label_start = time.perf_counter()
         sa_t_1, sa_t_2, r_t_1, r_t_2, labels = self.get_label(    
             sa_t_1, sa_t_2, r_t_1, r_t_2)
+        self._log_time("entropy_sampling.label", label_start, labeled=len(labels))
         
         if len(labels) > 0:
             self.put_queries(sa_t_1, sa_t_2, labels)
+        self._log_time("entropy_sampling.total", total_start, labeled=len(labels))
         
         return len(labels)
     
     def train_reward(self):
+        train_start = time.perf_counter()
         ensemble_losses = [[] for _ in range(self.de)]
         ensemble_acc = np.array([0 for _ in range(self.de)])
         
@@ -676,8 +787,10 @@ class RewardModel:
         num_epochs = int(np.ceil(max_len/self.train_batch_size))
         list_debug_loss1, list_debug_loss2 = [], []
         total = 0
+        epoch_times = []
         
         for epoch in range(num_epochs):
+            epoch_start = time.perf_counter()
             self.opt.zero_grad()
             loss = 0.0
             
@@ -716,12 +829,16 @@ class RewardModel:
                 
             loss.backward()
             self.opt.step()
+            epoch_times.append((time.perf_counter() - epoch_start) * 1000.0)
         
         ensemble_acc = ensemble_acc / total
+        avg_epoch_ms = float(np.mean(epoch_times)) if len(epoch_times) > 0 else 0.0
+        self._log_time("train_reward", train_start, max_len=max_len, num_epochs=num_epochs, avg_epoch_ms=f"{avg_epoch_ms:.2f}")
         
         return ensemble_acc
     
     def train_soft_reward(self):
+        train_start = time.perf_counter()
         ensemble_losses = [[] for _ in range(self.de)]
         ensemble_acc = np.array([0 for _ in range(self.de)])
         
@@ -733,8 +850,10 @@ class RewardModel:
         num_epochs = int(np.ceil(max_len/self.train_batch_size))
         list_debug_loss1, list_debug_loss2 = [], []
         total = 0
+        epoch_times = []
         
         for epoch in range(num_epochs):
+            epoch_start = time.perf_counter()
             self.opt.zero_grad()
             loss = 0.0
             
@@ -779,7 +898,10 @@ class RewardModel:
                 
             loss.backward()
             self.opt.step()
+            epoch_times.append((time.perf_counter() - epoch_start) * 1000.0)
         
         ensemble_acc = ensemble_acc / total
+        avg_epoch_ms = float(np.mean(epoch_times)) if len(epoch_times) > 0 else 0.0
+        self._log_time("train_soft_reward", train_start, max_len=max_len, num_epochs=num_epochs, avg_epoch_ms=f"{avg_epoch_ms:.2f}")
         
         return ensemble_acc

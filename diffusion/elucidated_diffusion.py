@@ -4,6 +4,7 @@ Code was adapted from https://github.com/lucidrains/denoising-diffusion-pytorch
 """
 import math
 import pathlib
+import time
 from multiprocessing import cpu_count
 from typing import Optional, Sequence, Tuple
 
@@ -563,6 +564,7 @@ class REDQTrainer(Trainer):
 
     def train_from_redq_buffer(self, buffer: ReplayBuffer, num_steps: Optional[int] = None):
         num_steps = num_steps or self.train_num_steps
+        train_start = time.perf_counter()
         for j in range(num_steps):
             # b = buffer.sample_batch(self.batch_size)
             obs, actions, rewards, next_obs, not_done, not_done_no_max = buffer.sample(self.batch_size)
@@ -595,6 +597,11 @@ class REDQTrainer(Trainer):
             loss = self.train_on_batch(data)
             if j % 1000 == 0:
                 print(f'[{j}/{num_steps}] loss: {loss:.4f}')
+        elapsed_ms = (time.perf_counter() - train_start) * 1000.0
+        print(
+            f"[TIME][Diffusion] train_from_redq_buffer {elapsed_ms:.2f}ms "
+            f"| num_steps={num_steps} batch_size={self.batch_size}"
+        )
 
     def update_normalizer(self, buffer: ReplayBuffer, device=None):
         data = make_inputs_from_replay_buffer(buffer, self.model_terminals)
