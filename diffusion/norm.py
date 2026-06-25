@@ -26,14 +26,20 @@ class MinMaxNormalizer(BaseNormalizer):
         print('Maxs:', self.max)
 
     def normalize(self, x: torch.Tensor) -> torch.Tensor:
-        return (x - self.min) / (self.max - self.min) * 2 - 1
+        min_ = self.min.to(x.device)
+        max_ = self.max.to(x.device)
+        return (x - min_) / (max_ - min_) * 2 - 1
 
     def unnormalize(self, x: torch.Tensor) -> torch.Tensor:
-        return (x + 1) / 2 * (self.max - self.min) + self.min
+        min_ = self.min.to(x.device)
+        max_ = self.max.to(x.device)
+        return (x + 1) / 2 * (max_ - min_) + min_
 
     def reset(self, dataset: torch.Tensor, eps: float = 1e-5):
-        self.min = dataset.min(dim=0).values
-        self.max = dataset.max(dim=0).values + eps
+        min_ = dataset.min(dim=0).values
+        max_ = dataset.max(dim=0).values + eps
+        self.register_buffer('min', min_)
+        self.register_buffer('max', max_)
         print('Mins:', self.min)
         print('Maxs:', self.max)
 
@@ -58,17 +64,25 @@ class Normalizer(BaseNormalizer):
         print('Stds:', self.std)
 
     def normalize(self, x: torch.Tensor) -> torch.Tensor:
-        return (x - self.mean) / self.std * self.target_std
+        mean = self.mean.to(x.device)
+        std = self.std.to(x.device)
+        return (x - mean) / std * self.target_std
 
     def unnormalize(self, x: torch.Tensor) -> torch.Tensor:
-        return x / self.target_std * self.std + self.mean
+        mean = self.mean.to(x.device)
+        std = self.std.to(x.device)
+        return x / self.target_std * std + mean
 
     def reset(self, dataset: torch.Tensor, eps: float = 1e-5):
-        self.mean = dataset.mean(dim=0)
-        self.std = dataset.std(dim=0) + eps
+        mean = dataset.mean(dim=0)
+        std = dataset.std(dim=0) + eps
         if self.skip_dims:
-            self.mean[self.skip_dims] = 0.0
-            self.std[self.skip_dims] = 1.0
+            mean = mean.clone()
+            std = std.clone()
+            mean[self.skip_dims] = 0.0
+            std[self.skip_dims] = 1.0
+        self.register_buffer('mean', mean)
+        self.register_buffer('std', std)
         print('Means:', self.mean)
         print('Stds:', self.std)
 

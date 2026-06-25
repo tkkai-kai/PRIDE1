@@ -29,6 +29,14 @@ train_num_steps: 100000
 # Don't save.
 save_and_sample_every: 100000000
 
+# Warm-start diffusion retraining (default off -> original from-scratch each retrain).
+# When true: build the diffusion model once, then fine-tune it for diffusion_finetune_steps
+# (with a constant diffusion_finetune_lr, bypassing the cosine-to-zero scheduler) on each
+# subsequent retrain instead of training train_num_steps from scratch.
+diffusion_warm_start: false
+diffusion_finetune_steps: 5000
+diffusion_finetune_lr: 1e-4
+
 # Diffusion denoising network.
 dim_t: 256
 mlp_width: 1024

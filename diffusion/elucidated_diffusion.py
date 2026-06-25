@@ -21,6 +21,7 @@ from torchdiffeq import odeint
 from tqdm import tqdm
 
 from diffusion.norm import BaseNormalizer
+from device_utils import tensor_to_numpy
 from utils import make_inputs_from_replay_buffer
 
 from replay_buffer import ReplayBuffer
@@ -373,6 +374,17 @@ class Trainer(object):
         self.model.normalizer.to(self.accelerator.device)
         self.ema.ema_model.normalizer.to(self.accelerator.device)
 
+    def set_constant_lr(self, lr: float):
+        """Switch to a fixed learning rate and disable the scheduler.
+
+        Used for warm-start fine-tuning: the cosine scheduler is sized to
+        train_num_steps and decays to ~0, so reusing the trainer across retrains
+        would otherwise leave the LR pinned near zero. Calling this is idempotent.
+        """
+        self.lr_scheduler = None
+        for param_group in self.opt.param_groups:
+            param_group['lr'] = lr
+
     def save(self, milestone):
         if not self.accelerator.is_local_main_process:
             return
@@ -569,15 +581,11 @@ class REDQTrainer(Trainer):
             # b = buffer.sample_batch(self.batch_size)
             obs, actions, rewards, next_obs, not_done, not_done_no_max = buffer.sample(self.batch_size)
 
-            obs_np = obs.cpu().numpy() if obs.is_cuda else obs.numpy()
-            actions_np = actions.cpu().numpy() if actions.is_cuda else actions.numpy()
-            rewards_np = rewards.cpu().numpy() if rewards.is_cuda else rewards.numpy()
-            next_obs_np = next_obs.cpu().numpy() if next_obs.is_cuda else next_obs.numpy()
-            done_np = (
-                (1 - not_done_no_max).cpu().numpy()
-                if not_done_no_max.is_cuda
-                else (1 - not_done_no_max).numpy()
-            )
+            obs_np = tensor_to_numpy(obs)
+            actions_np = tensor_to_numpy(actions)
+            rewards_np = tensor_to_numpy(rewards)
+            next_obs_np = tensor_to_numpy(next_obs)
+            done_np = tensor_to_numpy(1 - not_done_no_max)
 
             data = [obs_np, actions_np, rewards_np, next_obs_np]
             if self.model_terminals:
@@ -606,8 +614,7 @@ class REDQTrainer(Trainer):
     def update_normalizer(self, buffer: ReplayBuffer, device=None):
         data = make_inputs_from_replay_buffer(buffer, self.model_terminals)
         data = torch.from_numpy(data).float()
+        target = device if device is not None else self.accelerator.device
+        data = data.to(target)
         self.model.normalizer.reset(data)
         self.ema.ema_model.normalizer.reset(data)
-        if device:
-            self.model.normalizer.to(device)
-            self.ema.ema_model.normalizer.to(device)

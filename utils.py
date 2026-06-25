@@ -143,10 +143,15 @@ def soft_update_params(net, target_net, tau):
         target_param.data.copy_(tau * param.data +
                                 (1 - tau) * target_param.data)
 
+def resolve_torch_device(requested="auto"):
+    from device_utils import resolve_torch_device as _resolve_torch_device
+    return _resolve_torch_device(requested)
+
+
 def set_seed_everywhere(seed):
+    from device_utils import seed_accelerators
     torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
+    seed_accelerators(seed)
     np.random.seed(seed)
     random.seed(seed)
 
@@ -216,7 +221,7 @@ class SquashedNormal(pyd.transformed_distribution.TransformedDistribution):
 
         self.base_dist = pyd.Normal(loc, scale)
         transforms = [TanhTransform()]
-        super().__init__(self.base_dist, transforms)
+        super().__init__(self.base_dist, transforms, validate_args=False)
 
     @property
     def mean(self):

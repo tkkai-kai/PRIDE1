@@ -36,7 +36,7 @@ class Workspace(object):
             agent=cfg.agent.name)
 
         utils.set_seed_everywhere(cfg.seed)
-        self.device = torch.device(cfg.device)
+        self.device = utils.resolve_torch_device(cfg.device)
         self.log_success = False
         
         # make env
@@ -95,7 +95,8 @@ class Workspace(object):
             teacher_eps_skip=cfg.teacher_eps_skip, 
             teacher_eps_equal=cfg.teacher_eps_equal,
             use_synthetic_reward_data=cfg.use_synthetic_reward_data,
-            synthetic_reward_ratio=cfg.synthetic_reward_ratio)
+            synthetic_reward_ratio=cfg.synthetic_reward_ratio,
+            device=self.device)
 
     def _log_time(self, stage, start_time, **metrics):
         elapsed_ms = (time.perf_counter() - start_time) * 1000.0
@@ -249,6 +250,10 @@ class Workspace(object):
             skip_dims = []
             
         retrain_diffusion_step = self.cfg.retrain_diffusion_every
+        # Warm-start: persistent diffusion trainer reused across retrains.
+        # None -> built (from scratch) on the first retrain.
+        diffusion_trainer = None
+        diffusion_warm_start = bool(getattr(self.cfg, "diffusion_warm_start", False))
         ###########################################################
 
 
@@ -260,29 +265,36 @@ class Workspace(object):
                 diffusion_total_start = time.perf_counter()
                 print(f'Retraining diffusion model at step {self.step + 1}')
 
+                # Warm-start: reuse the existing trainer (fine-tune) once it exists;
+                # otherwise build a fresh model and train from scratch (original behavior).
+                warm_reuse = diffusion_warm_start and (diffusion_trainer is not None)
+                diffusion_build_mode = "warm" if warm_reuse else "scratch"
+
                 construct_start = time.perf_counter()
-                diffusion_trainer = REDQTrainer(
-                    self.cfg,
-                    construct_diffusion_model(
+                if not warm_reuse:
+                    diffusion_trainer = REDQTrainer(
                         self.cfg,
-                        inputs=inputs,
-                        skip_dims=skip_dims,
-                        disable_terminal_norm=self.cfg.model_terminals,  # No terminals in DMC(False), OpenAI(True)
-                    ),
-                    # diffusion trainer arguments
-                    train_batch_size=self.cfg.train_batch_size,
-                    train_lr=self.cfg.train_lr,
-                    lr_scheduler=self.cfg.lr_scheduler,
-                    train_num_steps=self.cfg.train_num_steps,
-                    save_and_sample_every=self.cfg.save_and_sample_every,
-                    weight_decay=self.cfg.weight_decay,
-                    results_folder=self.work_dir,
-                    model_terminals=self.cfg.model_terminals,
-                )
+                        construct_diffusion_model(
+                            self.cfg,
+                            inputs=inputs,
+                            skip_dims=skip_dims,
+                            disable_terminal_norm=self.cfg.model_terminals,  # No terminals in DMC(False), OpenAI(True)
+                        ),
+                        # diffusion trainer arguments
+                        train_batch_size=self.cfg.train_batch_size,
+                        train_lr=self.cfg.train_lr,
+                        lr_scheduler=self.cfg.lr_scheduler,
+                        train_num_steps=self.cfg.train_num_steps,
+                        save_and_sample_every=self.cfg.save_and_sample_every,
+                        weight_decay=self.cfg.weight_decay,
+                        results_folder=self.work_dir,
+                        model_terminals=self.cfg.model_terminals,
+                    )
                 self._log_time(
                     "diffusion_retrain.construct",
                     construct_start,
                     train_num_steps=self.cfg.train_num_steps,
+                    mode=diffusion_build_mode,
                 )
 
                 normalizer_start = time.perf_counter()
@@ -290,11 +302,20 @@ class Workspace(object):
                 self._log_time("diffusion_retrain.update_normalizer", normalizer_start)
 
                 train_start = time.perf_counter()
-                diffusion_trainer.train_from_redq_buffer(self.replay_buffer)
+                if warm_reuse:
+                    finetune_steps = int(getattr(self.cfg, "diffusion_finetune_steps", 5000))
+                    finetune_lr = float(getattr(self.cfg, "diffusion_finetune_lr", 1e-4))
+                    diffusion_trainer.set_constant_lr(finetune_lr)
+                    diffusion_trainer.train_from_redq_buffer(self.replay_buffer, num_steps=finetune_steps)
+                    train_steps_done = finetune_steps
+                else:
+                    diffusion_trainer.train_from_redq_buffer(self.replay_buffer)
+                    train_steps_done = self.cfg.train_num_steps
                 self._log_time(
                     "diffusion_retrain.train",
                     train_start,
-                    train_num_steps=self.cfg.train_num_steps,
+                    train_num_steps=train_steps_done,
+                    mode=diffusion_build_mode,
                 )
 
                 reset_start = time.perf_counter()
@@ -372,6 +393,32 @@ class Workspace(object):
                     diffusion_total_start,
                     step=self.step + 1,
                     retrain_every=retrain_diffusion_step,
+                )
+
+                # Synthetic-vs-real drift score (logged for warm-start calibration; no
+                # auto-reset yet). Standardized mean gap + |log std ratio|, per group,
+                # with reward weighted x2 since reward fidelity matters most for RL.
+                def _gap(synth, real):
+                    eps = 1e-6
+                    synth = np.asarray(synth, dtype=np.float64).reshape(len(synth), -1)
+                    real = np.asarray(real, dtype=np.float64).reshape(len(real), -1)
+                    r_mean, r_std = real.mean(axis=0), real.std(axis=0)
+                    s_mean, s_std = synth.mean(axis=0), synth.std(axis=0)
+                    mean_gap = float(np.mean(np.abs(s_mean - r_mean) / (r_std + eps)))
+                    std_gap = float(np.mean(np.abs(np.log((s_std + eps) / (r_std + eps)))))
+                    return mean_gap, std_gap
+
+                ptr_drift = self.replay_buffer.idx
+                obs_mg, obs_sg = _gap(observations, self.replay_buffer.obses[:ptr_drift])
+                act_mg, act_sg = _gap(actions, self.replay_buffer.actions[:ptr_drift])
+                rew_mg, rew_sg = _gap(rewards, self.replay_buffer.rewards[:ptr_drift])
+                drift_total = (obs_mg + obs_sg) + (act_mg + act_sg) + 2.0 * (rew_mg + rew_sg)
+                print(
+                    f"[DRIFT] step={self.step + 1} mode={diffusion_build_mode} "
+                    f"total={drift_total:.4f} "
+                    f"obs(mean={obs_mg:.3f},std={obs_sg:.3f}) "
+                    f"act(mean={act_mg:.3f},std={act_sg:.3f}) "
+                    f"rew(mean={rew_mg:.3f},std={rew_sg:.3f})"
                 )
 
                 if self.cfg.print_buffer_stats:
@@ -533,8 +580,6 @@ class Workspace(object):
                 
             # adding data to the reward training data
             self.reward_model.add_data(obs, action, reward, done)
-            # print(f'Adding data to replay buffer: {obs.shape}, {action.shape}, {reward_hat.shape}, {next_obs.shape}, {done}, {done_no_max}')
-            # print(f'obs: {obs[0]}, action: {action[0]}, reward_hat: {reward_hat}, next_obs: {next_obs[0]}, done: {done}, done_no_max: {done_no_max}')
             self.replay_buffer.add(
                 obs, action, reward_hat, 
                 next_obs, done, done_no_max)

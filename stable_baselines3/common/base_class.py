@@ -496,7 +496,7 @@ class BaseAlgorithm(ABC):
         """
         if seed is None:
             return
-        set_random_seed(seed, using_cuda=self.device.type == th.device("cuda").type)
+        set_random_seed(seed, using_cuda=self.device.type in ("cuda", "xpu"))
         self.action_space.seed(seed)
         if self.env is not None:
             self.env.seed(seed)

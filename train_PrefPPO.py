@@ -10,6 +10,7 @@ from stable_baselines3.common.env_util import make_vec_dmcontrol_env, make_vec_m
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 from stable_baselines3.common.vec_env import VecNormalize
 from reward_model import RewardModel
+import utils
 
 def linear_schedule(initial_value: Union[float, str]) -> Callable[[float], float]:
     """
@@ -147,7 +148,8 @@ if __name__ == "__main__":
         teacher_eps_mistake=args.teacher_eps_mistake,
         teacher_eps_skip=args.teacher_eps_skip, 
         teacher_eps_equal=args.teacher_eps_equal,
-        large_batch=args.re_large_batch)
+        large_batch=args.re_large_batch,
+        device=utils.resolve_torch_device(os.environ.get("PRIDE_DEVICE", "auto")))
     
     if args.normalize == 1:
         env = VecNormalize(env, norm_reward=False)

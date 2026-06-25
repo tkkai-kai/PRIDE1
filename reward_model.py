@@ -13,7 +13,7 @@ import time
 
 from scipy.stats import norm
 
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
+import device_utils
 
 def gen_net(in_size=1, out_size=1, H=128, n_layers=3, activation='tanh'):
     net = []
@@ -31,7 +31,7 @@ def gen_net(in_size=1, out_size=1, H=128, n_layers=3, activation='tanh'):
 
     return net
 
-def KCenterGreedy(obs, full_obs, num_new_sample):
+def KCenterGreedy(obs, full_obs, num_new_sample, device="cpu"):
     kcenter_start = time.perf_counter()
     selected_index = []
     current_index = list(range(obs.shape[0]))
@@ -39,7 +39,7 @@ def KCenterGreedy(obs, full_obs, num_new_sample):
     new_full_obs = full_obs
     start_time = time.time()
     for count in range(num_new_sample):
-        dist = compute_smallest_dist(new_obs, new_full_obs)
+        dist = compute_smallest_dist(new_obs, new_full_obs, device=device)
         max_index = torch.argmax(dist)
         max_index = max_index.item()
         
@@ -61,7 +61,7 @@ def KCenterGreedy(obs, full_obs, num_new_sample):
     )
     return selected_index
 
-def compute_smallest_dist(obs, full_obs):
+def compute_smallest_dist(obs, full_obs, device="cpu"):
     dist_start = time.perf_counter()
     obs = torch.from_numpy(obs).float()
     full_obs = torch.from_numpy(full_obs).float()
@@ -103,9 +103,11 @@ class RewardModel:
                  teacher_eps_skip=0, 
                  teacher_eps_equal=0,
                  use_synthetic_reward_data=False,
-                 synthetic_reward_ratio=0.5):
+                 synthetic_reward_ratio=0.5,
+                 device="cpu"):
         
         # train data is trajectories, must process to sa and s..   
+        self.device = device_utils.resolve_torch_device(device)
         self.ds = ds
         self.da = da
         self.de = ensemble_size
@@ -185,7 +187,7 @@ class RewardModel:
         for i in range(self.de):
             model = nn.Sequential(*gen_net(in_size=self.ds+self.da, 
                                            out_size=1, H=256, n_layers=3, 
-                                           activation=self.activation)).float().to(device)
+                                           activation=self.activation)).float().to(self.device)
             self.ensemble.append(model)
             self.paramlst.extend(model.parameters())
             
@@ -292,7 +294,7 @@ class RewardModel:
 
     def r_hat_member(self, x, member=-1):
         # the network parameterizes r hat in eqn 1 from the paper
-        return self.ensemble[member](torch.from_numpy(x).float().to(device))
+        return self.ensemble[member](torch.from_numpy(x).float().to(self.device))
 
     def r_hat(self, x):
         # they say they average the rewards from each member of the ensemble, but I think this only makes sense if the rewards are already normalized
@@ -341,7 +343,7 @@ class RewardModel:
             sa_t_1 = self.buffer_seg1[epoch*batch_size:last_index]
             sa_t_2 = self.buffer_seg2[epoch*batch_size:last_index]
             labels = self.buffer_label[epoch*batch_size:last_index]
-            labels = torch.from_numpy(labels.flatten()).long().to(device)
+            labels = torch.from_numpy(labels.flatten()).long().to(self.device)
             total += labels.size(0)
             for member in range(self.de):
                 # get logits
@@ -571,7 +573,7 @@ class RewardModel:
                                  tot_sa_2.reshape(max_len, -1)], axis=1)
         
         kcenter_start = time.perf_counter()
-        selected_index = KCenterGreedy(temp_sa, tot_sa, self.mb_size)
+        selected_index = KCenterGreedy(temp_sa, tot_sa, self.mb_size, device=self.device)
         self._log_time("kcenter_sampling.kcenter", kcenter_start, selected=self.mb_size)
 
         r_t_1, sa_t_1 = r_t_1[selected_index], sa_t_1[selected_index]
@@ -624,7 +626,7 @@ class RewardModel:
                                  tot_sa_2.reshape(max_len, -1)], axis=1)
         
         kcenter_start = time.perf_counter()
-        selected_index = KCenterGreedy(temp_sa, tot_sa, self.mb_size)
+        selected_index = KCenterGreedy(temp_sa, tot_sa, self.mb_size, device=self.device)
         self._log_time("kcenter_disagree_sampling.kcenter", kcenter_start, selected=self.mb_size)
         
         r_t_1, sa_t_1 = r_t_1[selected_index], sa_t_1[selected_index]
@@ -678,7 +680,7 @@ class RewardModel:
                                  tot_sa_2.reshape(max_len, -1)], axis=1)
         
         kcenter_start = time.perf_counter()
-        selected_index = KCenterGreedy(temp_sa, tot_sa, self.mb_size)
+        selected_index = KCenterGreedy(temp_sa, tot_sa, self.mb_size, device=self.device)
         self._log_time("kcenter_entropy_sampling.kcenter", kcenter_start, selected=self.mb_size)
         
         r_t_1, sa_t_1 = r_t_1[selected_index], sa_t_1[selected_index]
@@ -805,7 +807,7 @@ class RewardModel:
                 sa_t_1 = self.buffer_seg1[idxs]
                 sa_t_2 = self.buffer_seg2[idxs]
                 labels = self.buffer_label[idxs]
-                labels = torch.from_numpy(labels.flatten()).long().to(device)
+                labels = torch.from_numpy(labels.flatten()).long().to(self.device)
                 
                 if member == 0:
                     total += labels.size(0)
@@ -868,7 +870,7 @@ class RewardModel:
                 sa_t_1 = self.buffer_seg1[idxs]
                 sa_t_2 = self.buffer_seg2[idxs]
                 labels = self.buffer_label[idxs]
-                labels = torch.from_numpy(labels.flatten()).long().to(device)
+                labels = torch.from_numpy(labels.flatten()).long().to(self.device)
                 
                 if member == 0:
                     total += labels.size(0)

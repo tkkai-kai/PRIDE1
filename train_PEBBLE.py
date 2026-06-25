@@ -32,7 +32,7 @@ class Workspace(object):
             agent=cfg.agent.name)
 
         utils.set_seed_everywhere(cfg.seed)
-        self.device = torch.device(cfg.device)
+        self.device = utils.resolve_torch_device(cfg.device)
         self.log_success = False
         
         # make env
@@ -82,7 +82,8 @@ class Workspace(object):
             teacher_gamma=cfg.teacher_gamma, 
             teacher_eps_mistake=cfg.teacher_eps_mistake, 
             teacher_eps_skip=cfg.teacher_eps_skip, 
-            teacher_eps_equal=cfg.teacher_eps_equal)
+            teacher_eps_equal=cfg.teacher_eps_equal,
+            device=self.device)
         
     def evaluate(self):
         average_episode_reward = 0

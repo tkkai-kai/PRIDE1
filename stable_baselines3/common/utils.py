@@ -23,7 +23,7 @@ def set_random_seed(seed: int, using_cuda: bool = False) -> None:
     """
     Seed the different random generators
     :param seed:
-    :param using_cuda:
+    :param using_cuda: True when training on CUDA or Intel XPU accelerators.
     """
     # Seed python RNG
     random.seed(seed)
@@ -33,9 +33,16 @@ def set_random_seed(seed: int, using_cuda: bool = False) -> None:
     th.manual_seed(seed)
 
     if using_cuda:
+        try:
+            from device_utils import seed_accelerators
+            seed_accelerators(seed)
+        except ImportError:
+            if th.cuda.is_available():
+                th.cuda.manual_seed_all(seed)
         # Deterministic operations for CuDNN, it may impact performances
-        th.backends.cudnn.deterministic = True
-        th.backends.cudnn.benchmark = False
+        if th.cuda.is_available() and hasattr(th.backends, "cudnn"):
+            th.backends.cudnn.deterministic = True
+            th.backends.cudnn.benchmark = False
 
 
 # From stable baselines
@@ -131,23 +138,21 @@ def get_device(device: Union[th.device, str] = "auto") -> th.device:
     """
     Retrieve PyTorch device.
     It checks that the requested device is available first.
-    For now, it supports only cpu and cuda.
-    By default, it tries to use the gpu.
+    Supports cpu, cuda, and xpu (Intel GPU on Dawn).
 
-    :param device: One for 'auto', 'cuda', 'cpu'
+    :param device: One of 'auto', 'cuda', 'xpu', 'cpu'
     :return:
     """
-    # Cuda by default
-    if device == "auto":
-        device = "cuda"
-    # Force conversion to th.device
-    device = th.device(device)
-
-    # Cuda not available
-    if device.type == th.device("cuda").type and not th.cuda.is_available():
-        return th.device("cpu")
-
-    return device
+    try:
+        from device_utils import resolve_torch_device
+        return resolve_torch_device(device)
+    except ImportError:
+        if device == "auto":
+            device = "cuda"
+        device = th.device(device)
+        if device.type == th.device("cuda").type and not th.cuda.is_available():
+            return th.device("cpu")
+        return device
 
 
 def get_latest_run_id(log_path: Optional[str] = None, log_name: str = "") -> int:

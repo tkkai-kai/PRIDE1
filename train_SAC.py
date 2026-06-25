@@ -27,7 +27,7 @@ class Workspace(object):
 
         utils.set_seed_everywhere(cfg.seed)
 
-        self.device = torch.device(cfg.device)
+        self.device = utils.resolve_torch_device(cfg.device)
         self.log_success = False
         self.step = 0
         

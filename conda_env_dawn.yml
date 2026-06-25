@@ -1,0 +1,7 @@
+# Reference only — setup uses pride_dawn_install_mesalib() (conda install mesalib).
+# Do NOT run: conda env update -f this file --prune  (removes torch/ipex from pride-dawn).
+name: pride-dawn
+channels:
+  - conda-forge
+dependencies:
+  - mesalib
