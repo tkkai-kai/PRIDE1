@@ -98,6 +98,24 @@ class Workspace(object):
             synthetic_reward_ratio=cfg.synthetic_reward_ratio,
             device=self.device)
 
+    def _get_diffusion_sample_ratio(self, step):
+        """Per-step diffusion sample ratio.
+
+        Returns the static cfg.diffusion_sample_ratio unless adaptive scheduling is
+        enabled, in which case it linearly ramps from 0 (at adaptive_ratio_warmup)
+        up to adaptive_ratio_max (reached at adaptive_ratio_ramp_end), then holds.
+        """
+        if not getattr(self.cfg, "adaptive_diffusion_ratio", False):
+            return self.cfg.diffusion_sample_ratio
+
+        warmup = float(self.cfg.adaptive_ratio_warmup)
+        ramp_end = float(self.cfg.adaptive_ratio_ramp_end)
+        max_ratio = float(self.cfg.adaptive_ratio_max)
+        denom = max(ramp_end - warmup, 1.0)
+        progress = (float(step) - warmup) / denom
+        progress = min(1.0, max(0.0, progress))
+        return progress * max_ratio
+
     def _log_time(self, stage, start_time, **metrics):
         elapsed_ms = (time.perf_counter() - start_time) * 1000.0
         metrics_str = " ".join([f"{k}={v}" for k, v in metrics.items()])
@@ -559,7 +577,7 @@ class Workspace(object):
                             self.diffusion_replay_buffer.relabel_with_predictor(self.reward_model)
                         interact_count = 0
                         
-                self.agent.update(self.replay_buffer, self.logger, self.step, 1, True, self.diffusion_replay_buffer, self.cfg.diffusion_sample_ratio)
+                self.agent.update(self.replay_buffer, self.logger, self.step, 1, True, self.diffusion_replay_buffer, self._get_diffusion_sample_ratio(self.step))
                 
             # unsupervised exploration
             elif self.step > self.cfg.num_seed_steps:

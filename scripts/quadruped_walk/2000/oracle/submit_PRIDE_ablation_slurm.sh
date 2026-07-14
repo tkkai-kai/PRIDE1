@@ -25,6 +25,10 @@ NUM_TRAIN_STEPS="${NUM_TRAIN_STEPS:-1000000}"
 DIFFUSION_WARM_START="${DIFFUSION_WARM_START:-false}"
 DIFFUSION_FINETUNE_STEPS="${DIFFUSION_FINETUNE_STEPS:-5000}"
 DIFFUSION_FINETUNE_LR="${DIFFUSION_FINETUNE_LR:-1e-4}"
+ADAPTIVE_DIFFUSION_RATIO="${ADAPTIVE_DIFFUSION_RATIO:-false}"
+ADAPTIVE_RATIO_MAX="${ADAPTIVE_RATIO_MAX:-0.5}"
+ADAPTIVE_RATIO_WARMUP="${ADAPTIVE_RATIO_WARMUP:-0}"
+ADAPTIVE_RATIO_RAMP_END="${ADAPTIVE_RATIO_RAMP_END:-200000}"
 SEED_LIST="${SEED_LIST:-12345 23451 34512 45123 51234}"
 OUTPUT_NAME="${OUTPUT_NAME:-pride_${RUN_DATE}_grp${GRP_LABEL}}"
 
@@ -43,6 +47,10 @@ echo "  num_train_steps=${NUM_TRAIN_STEPS}"
 echo "  diffusion_warm_start=${DIFFUSION_WARM_START}"
 echo "  diffusion_finetune_steps=${DIFFUSION_FINETUNE_STEPS}"
 echo "  diffusion_finetune_lr=${DIFFUSION_FINETUNE_LR}"
+echo "  adaptive_diffusion_ratio=${ADAPTIVE_DIFFUSION_RATIO}"
+echo "  adaptive_ratio_max=${ADAPTIVE_RATIO_MAX}"
+echo "  adaptive_ratio_warmup=${ADAPTIVE_RATIO_WARMUP}"
+echo "  adaptive_ratio_ramp_end=${ADAPTIVE_RATIO_RAMP_END}"
 echo "  seeds=${SEED_LIST}"
 echo "  output_name=${OUTPUT_NAME}"
 
@@ -75,5 +83,9 @@ for seed in ${SEED_LIST}; do
         "diffusion_warm_start=${DIFFUSION_WARM_START}" \
         "diffusion_finetune_steps=${DIFFUSION_FINETUNE_STEPS}" \
         "diffusion_finetune_lr=${DIFFUSION_FINETUNE_LR}" \
+        "adaptive_diffusion_ratio=${ADAPTIVE_DIFFUSION_RATIO}" \
+        "adaptive_ratio_max=${ADAPTIVE_RATIO_MAX}" \
+        "adaptive_ratio_warmup=${ADAPTIVE_RATIO_WARMUP}" \
+        "adaptive_ratio_ramp_end=${ADAPTIVE_RATIO_RAMP_END}" \
         "hydra.run.dir=outputs/${OUTPUT_NAME}_seed${seed}"
 done

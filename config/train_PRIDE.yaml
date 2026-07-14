@@ -11,6 +11,17 @@ retrain_diffusion_every: 10000
 diffusion_sample_ratio: 0.5
 skip_reward_norm: True
 
+# Adaptive diffusion sample ratio (curriculum).
+# When enabled, the per-batch diffusion ratio is computed every step as a linear
+# ramp instead of using the static diffusion_sample_ratio above:
+#   progress = (step - adaptive_ratio_warmup) / (adaptive_ratio_ramp_end - adaptive_ratio_warmup)
+#   ratio    = clip(progress, 0, 1) * adaptive_ratio_max
+# Early steps -> ~0 (train on real data), middle -> rising, late -> capped at max.
+adaptive_diffusion_ratio: false
+adaptive_ratio_warmup: 0
+adaptive_ratio_ramp_end: 200000
+adaptive_ratio_max: 0.5
+
 normalizer_type: 'standard'
 
 model_terminals: False  # No terminals in DMC(False), OpenAI(True)
