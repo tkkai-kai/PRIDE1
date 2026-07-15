@@ -354,50 +354,50 @@ class Workspace(object):
                     num_samples=self.cfg.num_samples,
                     num_sample_steps=self.cfg.num_sample_steps,
                 )
-                # print(f'Diffusion Observations: {observations.shape}, Actions: {actions.shape}, Rewards: {rewards.shape}, Next Observations: {next_observations.shape}, Terminals: {terminals.shape}')
-                # print(f'Diffusion Observations: {observations[0]}, Actions: {actions[0]}, Rewards: {rewards[0]}, Next Observations: {next_observations[0]}, Terminals: {terminals[0]}')
-                # Debug terminal behavior: check whether sampled terminals are continuous.
-                terminals_float = np.asarray(terminals, dtype=np.float32).reshape(-1)
-                terminal_threshold = float(getattr(self.cfg, "terminal_threshold", 0.5))
-                continuous_mask = (terminals_float > 1e-6) & (terminals_float < 1.0 - 1e-6)
-                done_binary = (terminals_float > terminal_threshold).astype(np.float32)
-                print(
-                    f"Diffusion Terminals stats: min={terminals_float.min():.4f}, "
-                    f"max={terminals_float.max():.4f}, mean={terminals_float.mean():.4f}, "
-                    f"std={terminals_float.std():.4f}"
-                )
-                print(
-                    f"Diffusion Terminals debug: continuous_ratio={continuous_mask.mean():.4f}, "
-                    f"binary_done_ratio@{terminal_threshold}={done_binary.mean():.4f}, "
-                    f"sample={terminals_float[:10]}"
-                )
-                # add sample to reward model's self inputs and targets
                 print(f'Adding {self.cfg.num_samples} samples to replay buffer.')
                 integrate_start = time.perf_counter()
-                synthetic_chunk_size = int(getattr(self.cfg, "synthetic_chunk_size", 2000))
                 total_synthetic = len(terminals)
-                for idx, (o, a, r, o2, term) in enumerate(zip(observations, actions, rewards, next_observations, terminals)):
-                    # Match the per-step types used by add_data(obs, action, reward, done).
-                    o = np.asarray(o, dtype=np.float32)
-                    a = np.asarray(a, dtype=np.float32)
-                    r = float(np.asarray(r).item())
-                    done = float(np.asarray(term).item())
-                    # Only store synthetic trajectories when enabled by config.
-                    if self.cfg.use_synthetic_reward_data:
-                        # When model_terminals is disabled, sampled terminals are all zero.
-                        # Force-close synthetic trajectories every fixed chunk to avoid one
-                        # unbounded trajectory growing forever in reward-model storage.
-                        synthetic_done = done
-                        if (not self.cfg.model_terminals) and synthetic_chunk_size > 0:
-                            is_chunk_end = ((idx + 1) % synthetic_chunk_size) == 0
-                            is_last = (idx + 1) == total_synthetic
-                            synthetic_done = float(is_chunk_end or is_last)
-                        self.reward_model.add_data(
-                            o, a, r, synthetic_done, synthetic=True
-                        )
-                    # relabel difussion buffer with reward model
-                    sa = np.concatenate([o, a], axis=-1)
-                    r_hat = self.reward_model.r_hat(sa)
+
+                # calculate uncertainty for each sample
+                sa_all = np.concatenate([observations, actions], axis=-1)
+                r_hat_all, unc_all = self.reward_model.r_hat_mean_uncertainty_batch(
+                    sa_all,
+                    batch_size=self.cfg.uncertainty_batch_size
+                )
+                r_hat_all = r_hat_all.reshape(-1)
+                unc_all = unc_all.reshape(-1)
+
+
+                keep_mask = np.ones(len(unc_all), dtype=bool)   
+                
+                use_uncertainty_filter = bool(getattr(self.cfg, "use_uncertainty_filter", False))
+                min_feedback = int(getattr(self.cfg, "minimum_feedback_for_uncertainty", 1))
+                keep_q = float(getattr(self.cfg, "uncertainty_keep_quantile", 0.7))
+
+                if use_uncertainty_filter and self.labeled_feedback >= min_feedback:
+                    threshold = float(np.quantile(unc_all, keep_q))
+                    keep_mask = unc_all <= threshold
+                    dropped_mask = ~keep_mask
+
+                    print(
+                        f"[UNCERTAINTY_FILTER] step={self.step + 1} "
+                        f"keep_q={keep_q:.2f} "
+                        f"threshold={threshold:.6f} "
+                        f"kept={keep_mask.sum()}/{len(keep_mask)} "
+                        f"dropped={dropped_mask.sum()} "
+                        f"mean_unc_all={unc_all.mean():.6f} "
+                        f"mean_unc_kept={unc_all[keep_mask].mean():.6f} "
+                        f"mean_unc_dropped={unc_all[dropped_mask].mean():.6f}"
+                    )
+
+
+                for idx in np.where(keep_mask)[0]:
+                    o = observations[idx]
+                    a = actions[idx]
+                    o2 = next_observations[idx]
+                    term = terminals[idx]
+                    r_hat = r_hat_all[idx]
+
                     self.diffusion_replay_buffer.add(o, a, r_hat, o2, term, term)
 
                 self._log_time(

@@ -304,6 +304,28 @@ class RewardModel:
             r_hats.append(self.r_hat_member(x, member=member).detach().cpu().numpy())
         r_hats = np.array(r_hats)
         return np.mean(r_hats)
+
+    # added for uncertainty estimation
+    def r_hat_mean_uncertainty_batch(self, x, batch_size=8192):
+        x = np.asarray(x, dtype=np.float32)
+        pred = []
+        
+        with torch.no_grad():
+            for member in range(self.de):
+                member_pred = []
+
+                for start in range(0, len(x), batch_size):
+                    end = min(start + batch_size, len(x))
+                    x_batch = torch.from_numpy(x[start:end]).float().to(self.device) # (batch_size, ds + da)
+                    pred_batch = self.ensemble[member](x_batch) # (batch_size, 1)
+                    member_pred.append(pred_batch.detach().cpu().numpy().reshape(-1))
+                    
+                member_pred = np.concatenate(member_pred, axis=0) # (N,)
+                pred.append(member_pred)
+
+            mean = np.mean(pred, axis=0)
+            uncertainty = np.std(pred, axis=0) # std of the predictions
+        return mean, uncertainty
     
     def r_hat_batch(self, x):
         # they say they average the rewards from each member of the ensemble, but I think this only makes sense if the rewards are already normalized
