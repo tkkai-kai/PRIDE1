@@ -16,8 +16,6 @@ FEED_TYPE="${FEED_TYPE:-0}"
 RUN_DATE="${RUN_DATE:-$(date +%Y%m%d)}"
 GRP_LABEL="${GRP_LABEL:-X}"
 DIFFUSION_SAMPLE_RATIO="${DIFFUSION_SAMPLE_RATIO:-0.5}"
-USE_SYNTHETIC_REWARD_DATA="${USE_SYNTHETIC_REWARD_DATA:-false}"
-SYNTHETIC_REWARD_RATIO="${SYNTHETIC_REWARD_RATIO:-0.0}"
 MAX_FEEDBACK="${MAX_FEEDBACK:-700}"
 RETRAIN_DIFFUSION_EVERY="${RETRAIN_DIFFUSION_EVERY:-10000}"
 TRAIN_BATCH_SIZE="${TRAIN_BATCH_SIZE:-256}"
@@ -37,10 +35,8 @@ source "${PRIDE_ROOT:-${SLURM_SUBMIT_DIR}}/config/hpc/slurm_preamble.sh"
 pride_slurm_batch_timer_start "PRIDE group ${GRP_LABEL}"
 pride_slurm_job_init train_PRIDE.py
 
-echo "  diffusion_sample_ratio=${DIFFUSION_SAMPLE_RATIO}"
-echo "  use_synthetic_reward_data=${USE_SYNTHETIC_REWARD_DATA}"
-echo "  synthetic_reward_ratio=${SYNTHETIC_REWARD_RATIO}"
-echo "  max_feedback=${MAX_FEEDBACK}"
+    echo "  diffusion_sample_ratio=${DIFFUSION_SAMPLE_RATIO}"
+    echo "  max_feedback=${MAX_FEEDBACK}"
 echo "  retrain_diffusion_every=${RETRAIN_DIFFUSION_EVERY}"
 echo "  train_batch_size=${TRAIN_BATCH_SIZE}"
 echo "  num_train_steps=${NUM_TRAIN_STEPS}"
@@ -78,8 +74,6 @@ for seed in ${SEED_LIST}; do
         "retrain_diffusion_every=${RETRAIN_DIFFUSION_EVERY}" \
         "train_batch_size=${TRAIN_BATCH_SIZE}" \
         "diffusion_sample_ratio=${DIFFUSION_SAMPLE_RATIO}" \
-        "use_synthetic_reward_data=${USE_SYNTHETIC_REWARD_DATA}" \
-        "synthetic_reward_ratio=${SYNTHETIC_REWARD_RATIO}" \
         "diffusion_warm_start=${DIFFUSION_WARM_START}" \
         "diffusion_finetune_steps=${DIFFUSION_FINETUNE_STEPS}" \
         "diffusion_finetune_lr=${DIFFUSION_FINETUNE_LR}" \

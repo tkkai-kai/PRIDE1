@@ -94,8 +94,6 @@ class Workspace(object):
             teacher_eps_mistake=cfg.teacher_eps_mistake, 
             teacher_eps_skip=cfg.teacher_eps_skip, 
             teacher_eps_equal=cfg.teacher_eps_equal,
-            use_synthetic_reward_data=cfg.use_synthetic_reward_data,
-            synthetic_reward_ratio=cfg.synthetic_reward_ratio,
             device=self.device)
 
     def _get_diffusion_sample_ratio(self, step):
@@ -354,58 +352,16 @@ class Workspace(object):
                     num_samples=self.cfg.num_samples,
                     num_sample_steps=self.cfg.num_sample_steps,
                 )
-                # print(f'Diffusion Observations: {observations.shape}, Actions: {actions.shape}, Rewards: {rewards.shape}, Next Observations: {next_observations.shape}, Terminals: {terminals.shape}')
-                # print(f'Diffusion Observations: {observations[0]}, Actions: {actions[0]}, Rewards: {rewards[0]}, Next Observations: {next_observations[0]}, Terminals: {terminals[0]}')
-                # Debug terminal behavior: check whether sampled terminals are continuous.
-                terminals_float = np.asarray(terminals, dtype=np.float32).reshape(-1)
-                terminal_threshold = float(getattr(self.cfg, "terminal_threshold", 0.5))
-                continuous_mask = (terminals_float > 1e-6) & (terminals_float < 1.0 - 1e-6)
-                done_binary = (terminals_float > terminal_threshold).astype(np.float32)
-                print(
-                    f"Diffusion Terminals stats: min={terminals_float.min():.4f}, "
-                    f"max={terminals_float.max():.4f}, mean={terminals_float.mean():.4f}, "
-                    f"std={terminals_float.std():.4f}"
-                )
-                print(
-                    f"Diffusion Terminals debug: continuous_ratio={continuous_mask.mean():.4f}, "
-                    f"binary_done_ratio@{terminal_threshold}={done_binary.mean():.4f}, "
-                    f"sample={terminals_float[:10]}"
-                )
                 # add sample to reward model's self inputs and targets
                 print(f'Adding {self.cfg.num_samples} samples to replay buffer.')
-                integrate_start = time.perf_counter()
-                synthetic_chunk_size = int(getattr(self.cfg, "synthetic_chunk_size", 2000))
-                total_synthetic = len(terminals)
-                for idx, (o, a, r, o2, term) in enumerate(zip(observations, actions, rewards, next_observations, terminals)):
-                    # Match the per-step types used by add_data(obs, action, reward, done).
+                for o, a, r, o2, term in zip(observations, actions, rewards, next_observations, terminals):
                     o = np.asarray(o, dtype=np.float32)
                     a = np.asarray(a, dtype=np.float32)
-                    r = float(np.asarray(r).item())
-                    done = float(np.asarray(term).item())
-                    # Only store synthetic trajectories when enabled by config.
-                    if self.cfg.use_synthetic_reward_data:
-                        # When model_terminals is disabled, sampled terminals are all zero.
-                        # Force-close synthetic trajectories every fixed chunk to avoid one
-                        # unbounded trajectory growing forever in reward-model storage.
-                        synthetic_done = done
-                        if (not self.cfg.model_terminals) and synthetic_chunk_size > 0:
-                            is_chunk_end = ((idx + 1) % synthetic_chunk_size) == 0
-                            is_last = (idx + 1) == total_synthetic
-                            synthetic_done = float(is_chunk_end or is_last)
-                        self.reward_model.add_data(
-                            o, a, r, synthetic_done, synthetic=True
-                        )
-                    # relabel difussion buffer with reward model
+                    # relabel diffusion buffer with reward model
                     sa = np.concatenate([o, a], axis=-1)
                     r_hat = self.reward_model.r_hat(sa)
                     self.diffusion_replay_buffer.add(o, a, r_hat, o2, term, term)
 
-                self._log_time(
-                    "diffusion_retrain.integrate_samples",
-                    integrate_start,
-                    num_samples=total_synthetic,
-                    use_synthetic=self.cfg.use_synthetic_reward_data,
-                )
                 self._log_time(
                     "diffusion_retrain.total",
                     diffusion_total_start,
