@@ -352,23 +352,19 @@ class Workspace(object):
                     num_samples=self.cfg.num_samples,
                     num_sample_steps=self.cfg.num_sample_steps,
                 )
+                relabel_start = time.perf_counter()
+
+                sa_batch = np.concatenate([observations, actions], axis=-1)
+                r_hats = self.reward_model.r_hat_batch(sa_batch)
                 # add sample to reward model's self inputs and targets
                 print(f'Adding {self.cfg.num_samples} samples to replay buffer.')
-                for o, a, r, o2, term in zip(observations, actions, rewards, next_observations, terminals):
-                    o = np.asarray(o, dtype=np.float32)
-                    a = np.asarray(a, dtype=np.float32)
-                    # relabel diffusion buffer with reward model
-                    sa = np.concatenate([o, a], axis=-1)
-                    r_hat = self.reward_model.r_hat(sa)
+                for o, a, r_hat, o2, term in zip(observations, actions, r_hats, next_observations, terminals):
                     self.diffusion_replay_buffer.add(o, a, r_hat, o2, term, term)
-
                 self._log_time(
-                    "diffusion_retrain.total",
-                    diffusion_total_start,
-                    step=self.step + 1,
-                    retrain_every=retrain_diffusion_step,
+                    "diffusion_retrain.relabel",
+                    relabel_start,
+                    num_samples=self.cfg.num_samples,
                 )
-
                 # Synthetic-vs-real drift score (logged for warm-start calibration; no
                 # auto-reset yet). Standardized mean gap + |log std ratio|, per group,
                 # with reward weighted x2 since reward fidelity matters most for RL.

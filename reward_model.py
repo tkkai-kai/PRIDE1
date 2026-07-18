@@ -277,16 +277,26 @@ class RewardModel:
         r_hats = np.array(r_hats)
         return np.mean(r_hats)
     
-    def r_hat_batch(self, x):
+    def r_hat_batch(self, x, batch_size=4096):
         # they say they average the rewards from each member of the ensemble, but I think this only makes sense if the rewards are already normalized
         # but I don't understand how the normalization should be happening right now :(
-        r_hats = []
+        x = np.asarray(x, dtype=np.float32)
+        preds = []
         for member in range(self.de):
-            r_hats.append(self.r_hat_member(x, member=member).detach().cpu().numpy())
-        r_hats = np.array(r_hats)
+            member_pred = []
 
-        return np.mean(r_hats, axis=0)
-    
+            for start in range(0, len(x), batch_size):
+                end = min(start + batch_size, len(x))
+                x_batch = x[start:end]
+                with torch.no_grad():
+                    x_tensor = torch.from_numpy(x_batch).float().to(self.device)
+                    pred = self.r_hat_member(x_tensor, member=member).detach().cpu().numpy()
+                    member_pred.append(pred)
+            member_pred = np.concatenate(member_pred, axis=0)
+            preds.append(member_pred)
+        
+        return np.mean(preds, axis=0)
+
     def save(self, model_dir, step):
         for member in range(self.de):
             torch.save(
