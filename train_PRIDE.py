@@ -94,8 +94,6 @@ class Workspace(object):
             teacher_eps_mistake=cfg.teacher_eps_mistake, 
             teacher_eps_skip=cfg.teacher_eps_skip, 
             teacher_eps_equal=cfg.teacher_eps_equal,
-            use_synthetic_reward_data=cfg.use_synthetic_reward_data,
-            synthetic_reward_ratio=cfg.synthetic_reward_ratio,
             device=self.device)
 
     def _get_diffusion_sample_ratio(self, step):
@@ -356,9 +354,9 @@ class Workspace(object):
                 )
                 print(f'Adding {self.cfg.num_samples} samples to replay buffer.')
                 integrate_start = time.perf_counter()
-                total_synthetic = len(terminals)
+                num_generated = len(terminals)
 
-                # calculate uncertainty for each sample
+                # calculate uncertainty for each sample (std across reward ensemble members)
                 sa_all = np.concatenate([observations, actions], axis=-1)
                 r_hat_all, unc_all = self.reward_model.r_hat_mean_uncertainty_batch(
                     sa_all,
@@ -367,9 +365,8 @@ class Workspace(object):
                 r_hat_all = r_hat_all.reshape(-1)
                 unc_all = unc_all.reshape(-1)
 
+                keep_mask = np.ones(len(unc_all), dtype=bool)
 
-                keep_mask = np.ones(len(unc_all), dtype=bool)   
-                
                 use_uncertainty_filter = bool(getattr(self.cfg, "use_uncertainty_filter", False))
                 min_feedback = int(getattr(self.cfg, "minimum_feedback_for_uncertainty", 1))
                 keep_q = float(getattr(self.cfg, "uncertainty_keep_quantile", 0.7))
@@ -390,7 +387,6 @@ class Workspace(object):
                         f"mean_unc_dropped={unc_all[dropped_mask].mean():.6f}"
                     )
 
-
                 for idx in np.where(keep_mask)[0]:
                     o = observations[idx]
                     a = actions[idx]
@@ -403,8 +399,8 @@ class Workspace(object):
                 self._log_time(
                     "diffusion_retrain.integrate_samples",
                     integrate_start,
-                    num_samples=total_synthetic,
-                    use_synthetic=self.cfg.use_synthetic_reward_data,
+                    num_samples=num_generated,
+                    kept=int(keep_mask.sum()),
                 )
                 self._log_time(
                     "diffusion_retrain.total",

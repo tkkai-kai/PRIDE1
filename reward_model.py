@@ -102,8 +102,6 @@ class RewardModel:
                  teacher_eps_mistake=0, 
                  teacher_eps_skip=0, 
                  teacher_eps_equal=0,
-                 use_synthetic_reward_data=False,
-                 synthetic_reward_ratio=0.5,
                  device="cpu"):
         
         # train data is trajectories, must process to sa and s..   
@@ -130,9 +128,6 @@ class RewardModel:
         self.construct_ensemble()
         self.inputs = []
         self.targets = []
-        # to seperately store synthetic data
-        self.syn_inputs = []
-        self.syn_targets = []
 
         self.raw_actions = []
         self.img_inputs = []
@@ -146,8 +141,6 @@ class RewardModel:
         self.best_label = []
         self.best_action = []
         self.large_batch = large_batch
-        self.use_synthetic_reward_data = use_synthetic_reward_data
-        self.synthetic_reward_ratio = synthetic_reward_ratio
         
         # new teacher
         self.teacher_beta = teacher_beta
@@ -193,7 +186,7 @@ class RewardModel:
             
         self.opt = torch.optim.Adam(self.paramlst, lr = self.lr)
     
-    def _add_data_to_inputs(self, obs, act, rew, done, data_input, data_target):
+    def add_data(self, obs, act, rew, done):
         sa_t = np.concatenate([obs, act], axis=-1)
         r_t = rew
         
@@ -201,47 +194,26 @@ class RewardModel:
         r_t = np.array(r_t)
         flat_target = r_t.reshape(1, 1)
 
-        init_data = len(data_input) == 0
+        init_data = len(self.inputs) == 0
         if init_data:
-            # Start a new trajectory as chunk lists to avoid O(N^2) concatenation.
-            data_input.append([flat_input])
-            data_target.append([flat_target])
+            self.inputs.append(flat_input)
+            self.targets.append(flat_target)
+        elif done:
+            self.inputs[-1] = np.concatenate([self.inputs[-1], flat_input])
+            self.targets[-1] = np.concatenate([self.targets[-1], flat_target])
+            # FIFO
+            if len(self.inputs) > self.max_size:
+                self.inputs = self.inputs[1:]
+                self.targets = self.targets[1:]
+            self.inputs.append([])
+            self.targets.append([])
         else:
-            if len(data_input[-1]) == 0:
-                data_input[-1] = [flat_input]
-                data_target[-1] = [flat_target]
+            if len(self.inputs[-1]) == 0:
+                self.inputs[-1] = flat_input
+                self.targets[-1] = flat_target
             else:
-                # Backward-compatible path in case a trajectory is already materialized ndarray.
-                if isinstance(data_input[-1], list):
-                    data_input[-1].append(flat_input)
-                    data_target[-1].append(flat_target)
-                else:
-                    data_input[-1] = [data_input[-1], flat_input]
-                    data_target[-1] = [data_target[-1], flat_target]
-
-        if done and not init_data:
-            # Materialize current trajectory once at episode boundary.
-            if isinstance(data_input[-1], list):
-                if len(data_input[-1]) > 0:
-                    data_input[-1] = np.concatenate(data_input[-1], axis=0).astype(np.float32, copy=False)
-                    data_target[-1] = np.concatenate(data_target[-1], axis=0).astype(np.float32, copy=False)
-                else:
-                    data_input[-1] = np.empty((0, self.da + self.ds), dtype=np.float32)
-                    data_target[-1] = np.empty((0, 1), dtype=np.float32)
-
-            # Close current trajectory and start a new empty slot.
-            # This handles consecutive terminal samples safely.
-            if len(data_input) > self.max_size:
-                del data_input[0]
-                del data_target[0]
-            data_input.append([])
-            data_target.append([])
-
-    def add_data(self, obs, act, rew, done, synthetic=False):
-        if synthetic:
-            self._add_data_to_inputs(obs, act, rew, done, self.syn_inputs, self.syn_targets)
-        else:
-            self._add_data_to_inputs(obs, act, rew, done, self.inputs, self.targets)
+                self.inputs[-1] = np.concatenate([self.inputs[-1], flat_input])
+                self.targets[-1] = np.concatenate([self.targets[-1], flat_target])
 
                 
     def add_data_batch(self, obses, rewards):
@@ -309,7 +281,7 @@ class RewardModel:
     def r_hat_mean_uncertainty_batch(self, x, batch_size=8192):
         x = np.asarray(x, dtype=np.float32)
         pred = []
-        
+
         with torch.no_grad():
             for member in range(self.de):
                 member_pred = []
@@ -319,14 +291,14 @@ class RewardModel:
                     x_batch = torch.from_numpy(x[start:end]).float().to(self.device) # (batch_size, ds + da)
                     pred_batch = self.ensemble[member](x_batch) # (batch_size, 1)
                     member_pred.append(pred_batch.detach().cpu().numpy().reshape(-1))
-                    
+
                 member_pred = np.concatenate(member_pred, axis=0) # (N,)
                 pred.append(member_pred)
 
             mean = np.mean(pred, axis=0)
             uncertainty = np.std(pred, axis=0) # std of the predictions
         return mean, uncertainty
-    
+
     def r_hat_batch(self, x):
         # they say they average the rewards from each member of the ensemble, but I think this only makes sense if the rewards are already normalized
         # but I don't understand how the normalization should be happening right now :(
@@ -381,101 +353,41 @@ class RewardModel:
         ensemble_acc = ensemble_acc / total
         return np.mean(ensemble_acc)
 
-    def _get_queries_from_inputs(self, data_inputs, data_targets, mb_size=20):
-        total_start = time.perf_counter()
-        if mb_size == 0:
-            empty_inputs = np.empty((0, self.size_segment, self.ds + self.da), dtype=np.float32)
-            empty_targets = np.empty((0, self.size_segment, 1), dtype=np.float32)
-            return empty_inputs, empty_inputs, empty_targets, empty_targets
+    def get_queries(self, mb_size=20):
+        len_traj, max_len = len(self.inputs[0]), len(self.inputs)
+        img_t_1, img_t_2 = None, None
         
-        # materialize the trajectories to avoid O(N^2) concatenation
-        def materialize(traj, target):
-            if isinstance(traj, list):
-                if len(traj) == 0:
-                    traj_arr = np.empty((0, self.ds + self.da), dtype=np.float32)
-                    target_arr = np.empty((0, 1), dtype=np.float32)
-                else:
-                    traj_arr = np.concatenate(traj, axis=0).astype(np.float32, copy=False)
-                    target_arr = np.concatenate(target, axis=0).astype(np.float32, copy=False)
-                return traj_arr, target_arr
-            return traj, target
+        if len(self.inputs[-1]) < len_traj:
+            max_len = max_len - 1
+        
+        # get train traj
+        train_inputs = np.array(self.inputs[:max_len])
+        train_targets = np.array(self.targets[:max_len])
+   
+        batch_index_2 = np.random.choice(max_len, size=mb_size, replace=True)
+        sa_t_2 = train_inputs[batch_index_2] # Batch x T x dim of s&a
+        r_t_2 = train_targets[batch_index_2] # Batch x T x 1
+        
+        batch_index_1 = np.random.choice(max_len, size=mb_size, replace=True)
+        sa_t_1 = train_inputs[batch_index_1] # Batch x T x dim of s&a
+        r_t_1 = train_targets[batch_index_1] # Batch x T x 1
+                
+        sa_t_1 = sa_t_1.reshape(-1, sa_t_1.shape[-1]) # (Batch x T) x dim of s&a
+        r_t_1 = r_t_1.reshape(-1, r_t_1.shape[-1]) # (Batch x T) x 1
+        sa_t_2 = sa_t_2.reshape(-1, sa_t_2.shape[-1]) # (Batch x T) x dim of s&a
+        r_t_2 = r_t_2.reshape(-1, r_t_2.shape[-1]) # (Batch x T) x 1
 
-        valid_pairs = [
-            (traj_inputs_arr, traj_targets_arr)
-            for traj_inputs, traj_targets in zip(data_inputs, data_targets)
-            for traj_inputs_arr, traj_targets_arr in [materialize(traj_inputs, traj_targets)]
-            if len(traj_inputs_arr) >= self.size_segment
-        ]
-        if len(valid_pairs) == 0:
-            raise ValueError(
-                f"Not enough trajectory data to sample segment length {self.size_segment}."
-            )
-
-        def sample_segments():
-            batch_index = np.random.choice(len(valid_pairs), size=mb_size, replace=True)
-            seg_inputs = []
-            seg_targets = []
-            for idx in batch_index:
-                traj_inputs, traj_targets = valid_pairs[idx]
-                max_start = len(traj_inputs) - self.size_segment
-                start = np.random.randint(0, max_start + 1)
-                end = start + self.size_segment
-                seg_inputs.append(traj_inputs[start:end])
-                seg_targets.append(traj_targets[start:end])
-            return np.stack(seg_inputs, axis=0), np.stack(seg_targets, axis=0)
-
-        sa_t_1, r_t_1 = sample_segments()
-        sa_t_2, r_t_2 = sample_segments()
-        self._log_time(
-            "_get_queries_from_inputs",
-            total_start,
-            mb_size=mb_size,
-            valid_pairs=len(valid_pairs),
-            segment_len=self.size_segment,
-        )
-        return sa_t_1, sa_t_2, r_t_1, r_t_2
-
-
-    def get_queries(self, mb_size=20, synthetic=None, synthetic_ratio=None):
-        total_start = time.perf_counter()
-        if synthetic is None:
-            synthetic = self.use_synthetic_reward_data
-        if synthetic_ratio is None:
-            synthetic_ratio = self.synthetic_reward_ratio
-
-        if not synthetic:
-            outputs = self._get_queries_from_inputs(self.inputs, self.targets, mb_size)
-            self._log_time("get_queries", total_start, synthetic=False, mb_size=mb_size)
-            return outputs
-
-        # synthetic_ratio = min(max(float(synthetic_ratio), 0.0), 1.0)
-        num_synthetic = int(mb_size * synthetic_ratio)
-        num_real = mb_size - num_synthetic
-        print(f"num_real: {num_real}, num_synthetic: {num_synthetic}")
-        # adding synthetic data to the inputs
-        real_start = time.perf_counter()
-        real_sa_t_1, real_sa_t_2, real_r_t_1, real_r_t_2 = self._get_queries_from_inputs(self.inputs, self.targets, num_real)
-        self._log_time("get_queries.real", real_start, num_real=num_real)
-        try:
-            syn_start = time.perf_counter()
-            syn_sa_t_1, syn_sa_t_2, syn_r_t_1, syn_r_t_2 = self._get_queries_from_inputs(self.syn_inputs, self.syn_targets, num_synthetic)
-            self._log_time("get_queries.synthetic", syn_start, num_synthetic=num_synthetic, fallback=False)
-        except ValueError:
-            syn_start = time.perf_counter()
-            syn_sa_t_1, syn_sa_t_2, syn_r_t_1, syn_r_t_2 = self._get_queries_from_inputs(self.inputs, self.targets, num_synthetic)
-            self._log_time("get_queries.synthetic", syn_start, num_synthetic=num_synthetic, fallback=True)
-        sa_t_1 = np.concatenate([real_sa_t_1, syn_sa_t_1], axis=0)
-        sa_t_2 = np.concatenate([real_sa_t_2, syn_sa_t_2], axis=0)
-        r_t_1 = np.concatenate([real_r_t_1, syn_r_t_1], axis=0)
-        r_t_2 = np.concatenate([real_r_t_2, syn_r_t_2], axis=0)
-        self._log_time(
-            "get_queries",
-            total_start,
-            synthetic=True,
-            num_real=num_real,
-            num_synthetic=num_synthetic,
-            mb_size=mb_size,
-        )
+        # Generate time index 
+        time_index = np.array([list(range(i*len_traj,
+                                            i*len_traj+self.size_segment)) for i in range(mb_size)])
+        time_index_2 = time_index + np.random.choice(len_traj-self.size_segment, size=mb_size, replace=True).reshape(-1,1)
+        time_index_1 = time_index + np.random.choice(len_traj-self.size_segment, size=mb_size, replace=True).reshape(-1,1)
+        
+        sa_t_1 = np.take(sa_t_1, time_index_1, axis=0) # Batch x size_seg x dim of s&a
+        r_t_1 = np.take(r_t_1, time_index_1, axis=0) # Batch x size_seg x 1
+        sa_t_2 = np.take(sa_t_2, time_index_2, axis=0) # Batch x size_seg x dim of s&a
+        r_t_2 = np.take(r_t_2, time_index_2, axis=0) # Batch x size_seg x 1
+                
         return sa_t_1, sa_t_2, r_t_1, r_t_2
 
     def put_queries(self, sa_t_1, sa_t_2, labels):

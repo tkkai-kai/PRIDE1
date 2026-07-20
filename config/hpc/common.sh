@@ -85,11 +85,35 @@ pride_load_hpc_config() {
 }
 
 pride_init_modules() {
-    if [[ -z "${_PRIDE_MODULES_INIT:-}" ]]; then
-        # shellcheck disable=SC1091
-        source /etc/profile.d/modules.sh
-        _PRIDE_MODULES_INIT=1
+    if [[ -n "${_PRIDE_MODULES_INIT:-}" ]]; then
+        return 0
     fi
+    # Already initialized (e.g. login shell): 'module' is defined, nothing to do.
+    if type module &>/dev/null; then
+        _PRIDE_MODULES_INIT=1
+        return 0
+    fi
+    # Locate the module init script across clusters:
+    #   Sheffield/Stanage -> Lmod at $MODULESHOME/init/bash (non-standard prefix)
+    #   Dawn/CSD3 or classic environment-modules -> /etc/profile.d/modules.sh
+    local candidate
+    for candidate in \
+        "${MODULESHOME:+${MODULESHOME}/init/bash}" \
+        "${LMOD_PKG:+${LMOD_PKG}/init/bash}" \
+        /etc/profile.d/modules.sh \
+        /etc/profile.d/lmod.sh \
+        /etc/profile.d/z00_lmod.sh \
+        /usr/share/lmod/lmod/init/bash \
+        /usr/share/Modules/init/bash; do
+        if [[ -n "${candidate}" && -f "${candidate}" ]]; then
+            # shellcheck disable=SC1090
+            source "${candidate}"
+            _PRIDE_MODULES_INIT=1
+            return 0
+        fi
+    done
+    echo "ERROR: could not locate a module init script (tried MODULESHOME, LMOD_PKG, /etc/profile.d)." >&2
+    return 1
 }
 
 pride_ensure_dawn_modulepath() {
