@@ -357,7 +357,6 @@ class Workspace(object):
                 sa_batch = np.concatenate([observations, actions], axis=-1)
                 r_hats = self.reward_model.r_hat_batch(sa_batch)
                 # add sample to reward model's self inputs and targets
-                print(f'Adding {self.cfg.num_samples} samples to replay buffer.')
                 for o, a, r_hat, o2, term in zip(observations, actions, r_hats, next_observations, terminals):
                     self.diffusion_replay_buffer.add(o, a, r_hat, o2, term, term)
                 self._log_time(
