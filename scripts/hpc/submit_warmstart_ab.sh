@@ -50,10 +50,17 @@ DIFFUSION_FINETUNE_LR="${DIFFUSION_FINETUNE_LR:-1e-4}"
 ADAPTIVE_DIFFUSION_RATIO="false"
 
 # --- Groups: label|warm_start ------------------------------------------------
-GROUP_SPECS=(
-    "nowarm|false"
-    "warm|true"
-)
+# Override with GROUP_SPECS_OVERRIDE (space-separated), e.g.
+#   GROUP_SPECS_OVERRIDE="warm|true"        -> only the warm arm
+#   GROUP_SPECS_OVERRIDE="nowarm|false warm|true"
+if [[ -n "${GROUP_SPECS_OVERRIDE:-}" ]]; then
+    read -r -a GROUP_SPECS <<< "${GROUP_SPECS_OVERRIDE}"
+else
+    GROUP_SPECS=(
+        "nowarm|false"
+        "warm|true"
+    )
+fi
 
 LOG_DIR="slurm_output/pride_${RUN_DATE}_${RUN_TAG}"
 mkdir -p "${LOG_DIR}"
