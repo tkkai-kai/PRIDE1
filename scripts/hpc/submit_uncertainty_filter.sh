@@ -10,9 +10,11 @@
 #
 #   group   use_uncertainty_filter  uncertainty_keep_quantile   notes
 #   ------  ----------------------  -------------------------   -------------------
-#   UF70    true                    0.70                        keep lowest-unc 70%
-#   UF50    true                    0.50                        keep lowest-unc 50%
-#   UF30    true                    0.30                        keep lowest-unc 30%
+#   UF80    true                    0.80                        keep lowest-unc 80%
+#   UF90    true                    0.90                        keep lowest-unc 90%
+#   UF95    true                    0.95                        keep lowest-unc 95%
+#
+# (Earlier sweep, already run 20260721: UF70/0.70, UF50/0.50, UF30/0.30.)
 #
 # (Baseline B0 = use_uncertainty_filter=false is submitted separately.)
 #
@@ -53,8 +55,8 @@ DIFFUSION_FINETUNE_STEPS="${DIFFUSION_FINETUNE_STEPS:-5000}"
 DIFFUSION_FINETUNE_LR="${DIFFUSION_FINETUNE_LR:-1e-4}"
 
 # --- Groups: label|uncertainty_keep_quantile --------------------------------
-# Override via GROUP_SPECS, e.g. GROUP_SPECS="UF70|0.7 UF50|0.5 UF30|0.3".
-GROUP_SPECS="${GROUP_SPECS:-UF70|0.7 UF50|0.5 UF30|0.3}"
+# Override via GROUP_SPECS, e.g. GROUP_SPECS="UF80|0.8 UF90|0.9 UF95|0.95".
+GROUP_SPECS="${GROUP_SPECS:-UF80|0.8 UF90|0.9 UF95|0.95}"
 
 LOG_DIR="slurm_output/pride_${RUN_DATE}_${RUN_TAG}"
 mkdir -p "${LOG_DIR}"
