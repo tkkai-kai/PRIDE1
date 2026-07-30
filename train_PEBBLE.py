@@ -182,6 +182,7 @@ class Workspace(object):
         # store train returns of recent 10 episodes
         avg_train_true_return = deque([], maxlen=10) 
         start_time = time.time()
+        fixed_start_time = time.time()
 
         interact_count = 0
         while self.step < self.cfg.num_train_steps:
