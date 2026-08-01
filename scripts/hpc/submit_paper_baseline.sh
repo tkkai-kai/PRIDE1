@@ -93,7 +93,8 @@ for seed in "${SEEDS[@]}"; do
     job_name="$(printf '%s_%s_s%s' "${METHOD,,}" "${MODE}" "${seed}" | tr - _)"
     stdout="${LOG_DIR}/${METHOD,,}_${MODE}_s${seed}_%j.out"
     stderr="${LOG_DIR}/${METHOD,,}_${MODE}_s${seed}_%j.err"
-    export_vars="ALL,PRIDE_ROOT=${REPO_ROOT},SEED=${seed},OUTPUT_NAME=${OUTPUT_NAME}"
+    # NONE avoids leaking submit-shell conda/PATH state into the batch job.
+    export_vars="NONE,PRIDE_ROOT=${REPO_ROOT},SEED=${seed},OUTPUT_NAME=${OUTPUT_NAME}"
     if [[ -n "${RETRAIN_DIFFUSION_EVERY}" ]]; then
         export_vars+=",RETRAIN_DIFFUSION_EVERY=${RETRAIN_DIFFUSION_EVERY}"
     fi

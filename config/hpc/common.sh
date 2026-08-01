@@ -83,6 +83,8 @@ pride_slurm_job_init() {
 
     : "${PS1:=}"
     set +u
+    # Drop submit-shell conda state so compute-node activation is clean.
+    unset CONDA_PREFIX CONDA_DEFAULT_ENV CONDA_PROMPT_MODIFIER CONDA_SHLVL CONDA_PYTHON_EXE CONDA_EXE
     # shellcheck disable=SC1091
     source "$(conda info --base)/etc/profile.d/conda.sh"
     conda activate "${CONDA_ENV}"
@@ -91,7 +93,16 @@ pride_slurm_job_init() {
     export MUJOCO_GL PRIDE_DEVICE
     export LD_LIBRARY_PATH="${CONDA_PREFIX}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
     mkdir -p outputs slurm_output
-    echo "cluster=${PRIDE_CLUSTER} partition=${SLURM_PARTITION} env=${CONDA_ENV} device=${PRIDE_DEVICE}"
+    echo "cluster=${PRIDE_CLUSTER} partition=${SLURM_PARTITION} env=${CONDA_DEFAULT_ENV:-${CONDA_ENV}} device=${PRIDE_DEVICE}"
+    echo "python=$(command -v python)"
+    python - <<'PY'
+import importlib
+import sys
+print(f"sys.executable={sys.executable}")
+for module_name in ("termcolor", "logger", "utils", "train_PRIDE"):
+    importlib.import_module(module_name)
+    print(f"import_ok={module_name}")
+PY
 }
 if false; then
 #!/usr/bin/env bash
