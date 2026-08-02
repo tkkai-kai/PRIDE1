@@ -288,6 +288,19 @@ class Workspace(object):
 
                 construct_start = time.perf_counter()
                 if not warm_reuse:
+                    trainer_kwargs = dict(
+                        results_folder=self.work_dir,
+                        model_terminals=self.cfg.model_terminals,
+                    )
+                    if getattr(self.cfg, "diffusion_trainer_kwargs_from_cfg", True):
+                        trainer_kwargs.update(
+                            train_batch_size=self.cfg.train_batch_size,
+                            train_lr=self.cfg.train_lr,
+                            lr_scheduler=self.cfg.lr_scheduler,
+                            train_num_steps=self.cfg.train_num_steps,
+                            save_and_sample_every=self.cfg.save_and_sample_every,
+                            weight_decay=self.cfg.weight_decay,
+                        )
                     diffusion_trainer = REDQTrainer(
                         self.cfg,
                         construct_diffusion_model(
@@ -296,15 +309,7 @@ class Workspace(object):
                             skip_dims=skip_dims,
                             disable_terminal_norm=self.cfg.model_terminals,  # No terminals in DMC(False), OpenAI(True)
                         ),
-                        # diffusion trainer arguments
-                        train_batch_size=self.cfg.train_batch_size,
-                        train_lr=self.cfg.train_lr,
-                        lr_scheduler=self.cfg.lr_scheduler,
-                        train_num_steps=self.cfg.train_num_steps,
-                        save_and_sample_every=self.cfg.save_and_sample_every,
-                        weight_decay=self.cfg.weight_decay,
-                        results_folder=self.work_dir,
-                        model_terminals=self.cfg.model_terminals,
+                        **trainer_kwargs,
                     )
                 self._log_time(
                     "diffusion_retrain.construct",

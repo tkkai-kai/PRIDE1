@@ -82,6 +82,7 @@ pride_load_hpc_config() {
     source "${config}"
     export PRIDE_CLUSTER CONDA_MODULE CONDA_ENV CONDA_ENV_FILE PRIDE_DEVICE MUJOCO_GL PRIDE_IMPORT_IPEX
     export DAWN_MODULEFILES CONDA_CLONE_SOURCE SLURM_ACCOUNT SLURM_PARTITION SLURM_QOS SLURM_GRES SLURM_TIME
+    export SLURM_TIME_MIN SLURM_EXCLUDE SLURM_MAIL_USER SLURM_MAIL_TYPE
 }
 
 pride_init_modules() {
@@ -129,6 +130,82 @@ pride_ensure_dawn_modulepath() {
     fi
 }
 
+# --- Maintenance-aware wall time ---------------------------------------------
+#
+# Slurm refuses to start a job whose StartTime + TimeLimit would overlap a MAINT
+# reservation, so an over-long --time leaves the job pending forever ("ReqNodeNotAvail,
+# Reserved for maintenance") instead of running in the time that is actually left.
+# pride_clamp_slurm_time shrinks SLURM_TIME to fit the next maintenance window.
+#
+#   PRIDE_DEADLINE            override the detected window start (any `date -d` string)
+#   PRIDE_DEADLINE_BUFFER_MIN margin left before it (default 30 minutes)
+#   PRIDE_IGNORE_DEADLINE=1   disable clamping entirely
+
+pride_slurm_time_to_seconds() {
+    local spec="${1:-}" days=0 rest h=0 m=0 s=0
+    [[ -z "${spec}" ]] && return 1
+    rest="${spec}"
+    if [[ "${spec}" == *-* ]]; then
+        days="${spec%%-*}"
+        rest="${spec#*-}"
+    fi
+    case "${rest}" in
+        *:*:*) IFS=: read -r h m s <<<"${rest}" ;;
+        *:*)   if [[ "${days}" == "0" ]]; then IFS=: read -r m s <<<"${rest}"; else IFS=: read -r h m <<<"${rest}"; fi ;;
+        *)     if [[ "${days}" == "0" ]]; then m="${rest}"; else h="${rest}"; fi ;;
+    esac
+    printf '%s\n' $((10#${days} * 86400 + 10#${h} * 3600 + 10#${m} * 60 + 10#${s}))
+}
+
+pride_seconds_to_slurm_time() {
+    local total="${1:?seconds required}"
+    printf '%d-%02d:%02d:%02d\n' \
+        $((total / 86400)) $((total % 86400 / 3600)) $((total % 3600 / 60)) $((total % 60))
+}
+
+pride_next_maintenance_start() {
+    if [[ -n "${PRIDE_DEADLINE:-}" ]]; then
+        date -d "${PRIDE_DEADLINE}" +%s 2>/dev/null
+        return
+    fi
+    local now start epoch best=""
+    now="$(date +%s)"
+    while read -r start; do
+        [[ -z "${start}" ]] && continue
+        epoch="$(date -d "${start/T/ }" +%s 2>/dev/null)" || continue
+        (( epoch <= now )) && continue
+        if [[ -z "${best}" ]] || (( epoch < best )); then
+            best="${epoch}"
+        fi
+    done < <(scontrol -o show reservation 2>/dev/null | awk '
+        /Flags=[^ ]*MAINT/ {
+            for (i = 1; i <= NF; i++) {
+                if ($i ~ /^StartTime=/) { sub(/^StartTime=/, "", $i); print $i }
+            }
+        }')
+    [[ -n "${best}" ]] && printf '%s\n' "${best}"
+}
+
+pride_clamp_slurm_time() {
+    [[ "${PRIDE_IGNORE_DEADLINE:-0}" == "1" ]] && return 0
+    local deadline now available requested buffer
+    deadline="$(pride_next_maintenance_start)" || return 0
+    [[ -z "${deadline}" ]] && return 0
+    now="$(date +%s)"
+    buffer=$(( ${PRIDE_DEADLINE_BUFFER_MIN:-30} * 60 ))
+    available=$(( deadline - now - buffer ))
+    if (( available <= 0 )); then
+        echo "ERROR: maintenance starts $(date -d "@${deadline}" '+%F %T'); no usable window left." >&2
+        return 1
+    fi
+    requested="$(pride_slurm_time_to_seconds "${SLURM_TIME:-}")" || return 0
+    if (( requested > available )); then
+        SLURM_TIME="$(pride_seconds_to_slurm_time "${available}")"
+        export SLURM_TIME
+        echo "NOTE: maintenance at $(date -d "@${deadline}" '+%F %T'); --time clamped to ${SLURM_TIME}." >&2
+    fi
+}
+
 pride_sbatch_cluster_args() {
     if [[ -z "${PRIDE_CLUSTER:-}" ]]; then
         pride_load_hpc_config || return 1
@@ -147,6 +224,16 @@ pride_sbatch_cluster_args() {
     fi
     if [[ -n "${SLURM_TIME:-}" ]]; then
         printf '%s\n' --time="${SLURM_TIME}"
+    fi
+    if [[ -n "${SLURM_TIME_MIN:-}" ]]; then
+        printf '%s\n' --time-min="${SLURM_TIME_MIN}"
+    fi
+    if [[ -n "${SLURM_EXCLUDE:-}" ]]; then
+        printf '%s\n' --exclude="${SLURM_EXCLUDE}"
+    fi
+    if [[ -n "${SLURM_MAIL_USER:-}" ]]; then
+        printf '%s\n' --mail-user="${SLURM_MAIL_USER}"
+        printf '%s\n' --mail-type="${SLURM_MAIL_TYPE:-BEGIN,END,FAIL,TIME_LIMIT}"
     fi
 }
 
@@ -192,6 +279,24 @@ pride_slurm_job_init() {
     source "$(pwd)/config/hpc/common.sh"
     pride_load_hpc_config
     pride_activate_runtime
+    pride_import_preflight "${check_file%.py}"
+}
+
+# Fail fast (seconds, not hours) if the activated env cannot import the training
+# stack — e.g. when submit-shell state shadows the conda interpreter.
+pride_import_preflight() {
+    local entry_module="${1:-train_PRIDE}"
+    echo "python=$(command -v python)"
+    PRIDE_ENTRY_MODULE="${entry_module}" python - <<'PY'
+import importlib
+import os
+import sys
+
+print(f"sys.executable={sys.executable}")
+for module_name in ("termcolor", "logger", "utils", os.environ["PRIDE_ENTRY_MODULE"]):
+    importlib.import_module(module_name)
+    print(f"import_ok={module_name}")
+PY
 }
 
 pride_slurm_batch_timer_start() {
@@ -347,6 +452,8 @@ pride_activate_runtime() {
     _pride_nounset=0
     [[ $- == *u* ]] && _pride_nounset=1
     set +u
+    # Drop submit-shell conda state so compute-node activation is clean.
+    unset CONDA_PREFIX CONDA_DEFAULT_ENV CONDA_PROMPT_MODIFIER CONDA_SHLVL CONDA_PYTHON_EXE CONDA_EXE
     # shellcheck disable=SC1091
     source "$(conda info --base)/etc/profile.d/conda.sh"
     if [[ "${PRIDE_CLUSTER}" == "dawn" ]]; then

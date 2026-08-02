@@ -40,6 +40,12 @@ train_num_steps: 100000
 # Don't save.
 save_and_sample_every: 100000000
 
+# When false, REDQTrainer is built without the cfg-derived training kwargs above,
+# so it falls back to its own defaults (batch 16, lr 1e-4, no scheduler) exactly as
+# the baseline branch does. Needed to keep an ablation against a baseline run from
+# also changing how the diffusion model is trained.
+diffusion_trainer_kwargs_from_cfg: true
+
 # Warm-start diffusion retraining (default off -> original from-scratch each retrain).
 # When true: build the diffusion model once, then fine-tune it for diffusion_finetune_steps
 # (with a constant diffusion_finetune_lr, bypassing the cosine-to-zero scheduler) on each
