@@ -15,7 +15,8 @@ pride_load_hpc_config() {
     source "${config}"
     export PRIDE_CLUSTER SLURM_PARTITION SLURM_QOS SLURM_GRES SLURM_TIME SLURM_EXCLUDE
     export SLURM_MAIL_USER SLURM_MAIL_TYPE
-    export CONDA_MODULE CONDA_ENV PRIDE_DEVICE MUJOCO_GL
+    export CONDA_MODULE CONDA_MODULE_CANDIDATES CONDA_ENV CONDA_ENV_PREFIX
+    export PRIDE_DEVICE MUJOCO_GL
 }
 
 pride_hpc_init() {
@@ -66,6 +67,36 @@ pride_init_modules() {
     return 1
 }
 
+# Login and compute nodes can serve different module trees (EL7 vs EL9 on
+# Stanage), so try every known base-conda module and keep the first that yields
+# a usable `conda`.
+pride_load_conda_module() {
+    local candidate
+    for candidate in ${CONDA_MODULE_CANDIDATES:-${CONDA_MODULE}}; do
+        if module load "${candidate}" 2>/dev/null && command -v conda &>/dev/null; then
+            echo "conda module=${candidate}"
+            return 0
+        fi
+        module unload "${candidate}" 2>/dev/null || true
+    done
+    return 1
+}
+
+# Last resort when no base-conda module is reachable: the env is self-contained,
+# so putting its bin directory first is equivalent to `conda activate` here.
+pride_activate_conda_prefix() {
+    local prefix="${CONDA_ENV_PREFIX:-${HOME}/.conda/envs/${CONDA_ENV}}"
+    if [[ ! -x "${prefix}/bin/python" ]]; then
+        echo "ERROR: no conda module loaded and no usable env at ${prefix}." >&2
+        echo "       Tried modules: ${CONDA_MODULE_CANDIDATES:-${CONDA_MODULE:-none}}" >&2
+        return 1
+    fi
+    export CONDA_PREFIX="${prefix}"
+    export CONDA_DEFAULT_ENV="${CONDA_ENV}"
+    export PATH="${prefix}/bin:${PATH}"
+    echo "conda module=none (activating prefix ${prefix})"
+}
+
 pride_slurm_job_init() {
     local entrypoint="${1:?training entrypoint required}"
     local repo_root="${PRIDE_ROOT:-${SLURM_SUBMIT_DIR:-}}"
@@ -78,28 +109,33 @@ pride_slurm_job_init() {
     cd "${repo_root}"
     pride_load_hpc_config
     pride_init_modules
-    module purge
-    module load "${CONDA_MODULE}"
+    module purge 2>/dev/null || true
 
     : "${PS1:=}"
     set +u
     # Drop submit-shell conda state so compute-node activation is clean.
     unset CONDA_PREFIX CONDA_DEFAULT_ENV CONDA_PROMPT_MODIFIER CONDA_SHLVL CONDA_PYTHON_EXE CONDA_EXE
-    # shellcheck disable=SC1091
-    source "$(conda info --base)/etc/profile.d/conda.sh"
-    conda activate "${CONDA_ENV}"
+    if pride_load_conda_module; then
+        # shellcheck disable=SC1091
+        source "$(conda info --base)/etc/profile.d/conda.sh"
+        conda activate "${CONDA_ENV}"
+    else
+        pride_activate_conda_prefix || return 1
+    fi
     set -u
 
     export MUJOCO_GL PRIDE_DEVICE
     export LD_LIBRARY_PATH="${CONDA_PREFIX}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+    export PRIDE_ENTRY_MODULE="${entrypoint%.py}"
     mkdir -p outputs slurm_output
     echo "cluster=${PRIDE_CLUSTER} partition=${SLURM_PARTITION} env=${CONDA_DEFAULT_ENV:-${CONDA_ENV}} device=${PRIDE_DEVICE}"
     echo "python=$(command -v python)"
     python - <<'PY'
 import importlib
+import os
 import sys
 print(f"sys.executable={sys.executable}")
-for module_name in ("termcolor", "logger", "utils", "train_PRIDE"):
+for module_name in ("termcolor", "logger", "utils", os.environ["PRIDE_ENTRY_MODULE"]):
     importlib.import_module(module_name)
     print(f"import_ok={module_name}")
 PY

@@ -9,13 +9,16 @@ set -euo pipefail
 
 : "${SEED:?SEED must be exported by the submitter}"
 : "${OUTPUT_NAME:?OUTPUT_NAME must be exported by the submitter}"
+# Query-selection scheme: 0 uniform, 1 disagreement, 2 entropy, 3 k-center,
+# 4 k-center+disagreement, 5 k-center+entropy. Default 0 keeps the paper runs.
+FEED_TYPE="${FEED_TYPE:-0}"
 
 # shellcheck source=config/hpc/slurm_preamble.sh
 source "${PRIDE_ROOT:-${SLURM_SUBMIT_DIR}}/config/hpc/slurm_preamble.sh"
 pride_slurm_job_init train_PEBBLE.py
 
 echo "method=PEBBLE env=quadruped_walk seed=${SEED} steps=1000000 feedback=2000"
-echo "feed_type=0 output=outputs/${OUTPUT_NAME}_seed${SEED}"
+echo "feed_type=${FEED_TYPE} output=outputs/${OUTPUT_NAME}_seed${SEED}"
 
 python train_PEBBLE.py \
     env=quadruped_walk \
@@ -31,7 +34,7 @@ python train_PEBBLE.py \
     max_feedback=2000 \
     reward_batch=200 \
     reward_update=50 \
-    feed_type=0 \
+    "feed_type=${FEED_TYPE}" \
     teacher_beta=-1 \
     teacher_gamma=1 \
     teacher_eps_mistake=0 \
