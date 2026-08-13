@@ -36,6 +36,13 @@ layer_norm: False
 # Diffusion sampling
 num_sample_steps: 128
 
+# Synthetic transition snapshot analysis (off for the paper baseline)
+save_transition_snapshots: false
+snapshot_steps: []
+snapshot_sample_size: 10000
+snapshot_recent_window: 20000
+snapshot_dir: transition_snapshots
+
 # Reward learning
 segment: 50
 activation: tanh

@@ -41,6 +41,37 @@ layer_norm: False
 # Diffusion sampling.
 num_sample_steps: 128
 
+# synthetic transition snapshot analysis
+# Off by default; the submit scripts turn it on per run so that unrelated
+# runs on this branch do not write snapshots.
+save_transition_snapshots: false
+
+# Offset off the retrain boundary on purpose: a step that is an exact
+# multiple of retrain_diffusion_every always yields synthetic_age == 0,
+# because the retrain fires at the top of the same loop iteration.
+# Each triplet samples the synthetic buffer fresh / mid-life / stale.
+# These defaults assume retrain_diffusion_every=10000; the submit scripts
+# recompute them whenever the interval differs.
+snapshot_steps:
+  - 100001
+  - 105000
+  - 109999
+  - 300001
+  - 305000
+  - 309999
+  - 500001
+  - 505000
+  - 509999
+  - 800001
+  - 805000
+  - 809999
+
+snapshot_sample_size: 10000
+
+# "recent real" 看最近多少个真实 transition
+snapshot_recent_window: 20000
+
+snapshot_dir: transition_snapshots
 
 # reward learning
 segment: 50

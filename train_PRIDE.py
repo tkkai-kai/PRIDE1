@@ -78,6 +78,15 @@ class Workspace(object):
         self.labeled_feedback = 0
         self.step = 0
 
+        # synthetic transition snapshot analysis
+        self.snapshot_steps = set(int(x) for x in cfg.snapshot_steps)
+        self.snapshot_sample_size = int(cfg.snapshot_sample_size)
+        self.snapshot_recent_window = int(cfg.snapshot_recent_window)
+        self.snapshot_dir = os.path.join(self.work_dir, str(cfg.snapshot_dir))
+
+        # records when the current synthetic buffer was generated
+        self.last_diffusion_retrain_step = None
+
         # instantiating the reward model
         self.reward_model = RewardModel(
             self.env.observation_space.shape[0],
@@ -183,7 +192,132 @@ class Workspace(object):
                     
         print("Reward function is updated!! ACC: " + str(total_acc))
 
+    def _get_recent_buffer_indices(self, buffer, recent_window):
+        """Indices of the most recently inserted transitions.
 
+        buffer.idx points at the NEXT insertion slot, so the newest samples
+        are the ones immediately before it, wrapping around capacity once
+        the buffer is full.
+        """
+        buffer_size = len(buffer)
+        if buffer_size == 0:
+            return np.array([], dtype=np.int64)
+
+        recent_window = min(int(recent_window), buffer_size)
+
+        if not buffer.full:
+            start = max(0, buffer.idx - recent_window)
+            return np.arange(start, buffer.idx, dtype=np.int64)
+
+        start = (buffer.idx - recent_window) % buffer.capacity
+        if start < buffer.idx:
+            return np.arange(start, buffer.idx, dtype=np.int64)
+
+        return np.concatenate([
+            np.arange(start, buffer.capacity, dtype=np.int64),
+            np.arange(0, buffer.idx, dtype=np.int64),
+        ])
+
+    def save_transition_snapshot(self, snapshot_step):
+        """Dump samples of real, recent-real and synthetic transitions to npz.
+
+        1. random samples from full REAL replay buffer
+        2. random samples from RECENT REAL transitions
+        3. random samples from current SYNTHETIC replay buffer
+
+        No plotting is done here.
+        """
+        real_size = len(self.replay_buffer)
+        syn_size = len(self.diffusion_replay_buffer)
+
+        if real_size == 0:
+            print(f"[SNAPSHOT] step={snapshot_step}: real buffer empty, skip.")
+            return
+
+        if syn_size == 0:
+            print(f"[SNAPSHOT] step={snapshot_step}: synthetic buffer empty, skip.")
+            return
+
+        # a private RNG keeps snapshot sampling from advancing the global numpy
+        # stream, which would otherwise perturb the RL run
+        rng = np.random.default_rng(int(self.cfg.seed) + int(snapshot_step) + 1234567)
+
+        def take(buffer, indices):
+            return tuple(
+                getattr(buffer, name)[indices].astype(np.float32)
+                for name in ('obses', 'actions', 'rewards', 'next_obses'))
+
+        # full real replay buffer
+        real_n = min(self.snapshot_sample_size, real_size)
+        real_obs, real_actions, real_rewards, real_next_obs = take(
+            self.replay_buffer, rng.choice(real_size, size=real_n, replace=False))
+
+        # most recent real transitions
+        recent_pool = self._get_recent_buffer_indices(
+            self.replay_buffer, self.snapshot_recent_window)
+        recent_n = min(self.snapshot_sample_size, len(recent_pool))
+        if recent_n > 0:
+            recent_indices = recent_pool[
+                rng.choice(len(recent_pool), size=recent_n, replace=False)]
+            (recent_real_obs, recent_real_actions,
+                recent_real_rewards, recent_real_next_obs) = take(
+                    self.replay_buffer, recent_indices)
+        else:
+            obs_dim = self.env.observation_space.shape[0]
+            act_dim = self.env.action_space.shape[0]
+            recent_real_obs = np.empty((0, obs_dim), dtype=np.float32)
+            recent_real_actions = np.empty((0, act_dim), dtype=np.float32)
+            recent_real_rewards = np.empty((0, 1), dtype=np.float32)
+            recent_real_next_obs = np.empty((0, obs_dim), dtype=np.float32)
+
+        # current synthetic replay buffer
+        syn_n = min(self.snapshot_sample_size, syn_size)
+        syn_obs, syn_actions, syn_rewards, syn_next_obs = take(
+            self.diffusion_replay_buffer,
+            rng.choice(syn_size, size=syn_n, replace=False))
+
+        # -1 marks a snapshot taken before any diffusion model was trained
+        last_retrain = self.last_diffusion_retrain_step
+        synthetic_age = (
+            -1 if last_retrain is None
+            else int(snapshot_step) - int(last_retrain))
+
+        os.makedirs(self.snapshot_dir, exist_ok=True)
+        save_path = os.path.join(
+            self.snapshot_dir, f"snapshot_step_{snapshot_step}.npz")
+
+        def meta(value):
+            return np.array([value], dtype=np.int64)
+
+        np.savez_compressed(
+            save_path,
+            step=meta(snapshot_step),
+            seed=meta(int(self.cfg.seed)),
+            real_buffer_size=meta(real_size),
+            synthetic_buffer_size=meta(syn_size),
+            last_diffusion_retrain_step=meta(
+                -1 if last_retrain is None else last_retrain),
+            synthetic_age=meta(synthetic_age),
+            retrain_diffusion_every=meta(int(self.cfg.retrain_diffusion_every)),
+            real_obs=real_obs,
+            real_actions=real_actions,
+            real_rewards=real_rewards,
+            real_next_obs=real_next_obs,
+            recent_real_obs=recent_real_obs,
+            recent_real_actions=recent_real_actions,
+            recent_real_rewards=recent_real_rewards,
+            recent_real_next_obs=recent_real_next_obs,
+            syn_obs=syn_obs,
+            syn_actions=syn_actions,
+            syn_rewards=syn_rewards,
+            syn_next_obs=syn_next_obs,
+        )
+
+        print(f"[SNAPSHOT] saved: {save_path}")
+        print(f"[SNAPSHOT] step={snapshot_step} real={real_n}/{real_size} "
+              f"recent={recent_n} synthetic={syn_n}/{syn_size} "
+              f"synthetic_age={synthetic_age}")
+    
     def reset_diffusion_buffer(self):
         self.diffusion_replay_buffer = ReplayBuffer(
             self.env.observation_space.shape,
@@ -253,6 +387,8 @@ class Workspace(object):
                 print(f'Adding {self.cfg.num_samples} samples to replay buffer.')
                 for o, a, r, o2, term in zip(observations, actions, rewards, next_observations, terminals):
                     self.diffusion_replay_buffer.add(o, a, r, o2, term, term)
+                # record the last diffusion retrain step
+                self.last_diffusion_retrain_step = self.step + 1
 
                 if self.cfg.print_buffer_stats:
                     ptr_location = self.replay_buffer.idx
@@ -414,6 +550,10 @@ class Workspace(object):
             episode_step += 1
             self.step += 1
             interact_count += 1
+
+
+            if self.cfg.save_transition_snapshots and self.step in self.snapshot_steps:
+                self.save_transition_snapshot(self.step)
             
         # self.agent.save(self.work_dir, self.step)
         # self.reward_model.save(self.work_dir, self.step)
