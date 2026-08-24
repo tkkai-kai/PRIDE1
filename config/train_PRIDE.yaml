@@ -54,17 +54,11 @@ save_transition_snapshots: false
 # recompute them whenever the interval differs.
 snapshot_steps:
   - 100001
-  - 105000
-  - 109999
+  - 200001
   - 300001
-  - 305000
-  - 309999
   - 500001
-  - 505000
-  - 509999
-  - 800001
-  - 805000
-  - 809999
+  - 700001
+  - 900001
 
 snapshot_sample_size: 10000
 
