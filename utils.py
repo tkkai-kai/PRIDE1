@@ -18,9 +18,37 @@ from torch import distributions as pyd
 
 if TYPE_CHECKING:
     from replay_buffer import ReplayBuffer
+
+
+class _LegacyGymAPI(gym.Wrapper):
+    """Map gym>=0.26 reset/step back to the 4-tuple API used by train_PRIDE."""
+
+    def reset(self, **kwargs):
+        out = self.env.reset(**kwargs)
+        if isinstance(out, tuple):
+            return out[0]
+        return out
+
+    def step(self, action):
+        out = self.env.step(action)
+        if len(out) == 5:
+            obs, reward, terminated, truncated, info = out
+            return obs, reward, bool(terminated) or bool(truncated), info
+        return out
     
 def make_env(cfg):
     """Helper function to create dm_control environment"""
+    if cfg.env in [
+        "HalfCheetah-v2",
+        "Walker2d-v2",
+        "Hopper-v2",
+    ]:
+        env = _LegacyGymAPI(gym.make(cfg.env))
+        env.reset(seed=int(cfg.seed))
+        if hasattr(env.action_space, "seed"):
+            env.action_space.seed(int(cfg.seed))
+        return env
+        
     if cfg.env == 'ball_in_cup_catch':
         domain_name = 'ball_in_cup'
         task_name = 'catch'

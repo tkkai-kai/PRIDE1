@@ -13,7 +13,7 @@ skip_reward_norm: True
 
 normalizer_type: 'standard'
 
-model_terminals: False  # No terminals in DMC(False), OpenAI(True)
+model_terminals: True  # No terminals in DMC(False), OpenAI(True)
 num_samples: 200000
 print_buffer_stats: true
 diffusion_start: 0
@@ -97,6 +97,7 @@ replay_buffer_capacity: ${num_train_steps}
 
 # evaluation config
 eval_frequency: 10000
+eval_openai_gym_frequency: 10000
 num_eval_episodes: 10
 device: cuda
 

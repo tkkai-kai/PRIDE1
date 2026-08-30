@@ -81,6 +81,10 @@ def compute_smallest_dist(obs, full_obs):
         total_dists = torch.cat(total_dists)
     return total_dists.unsqueeze(1)
 
+class NoQueryableTrajectories(RuntimeError):
+    """Raised when every stored episode is shorter than size_segment."""
+
+
 class RewardModel:
     def __init__(self, ds, da, 
                  ensemble_size=3, lr=3e-4, mb_size = 128, size_segment=1, 
@@ -180,10 +184,18 @@ class RewardModel:
         elif done:
             self.inputs[-1] = np.concatenate([self.inputs[-1], flat_input])
             self.targets[-1] = np.concatenate([self.targets[-1], flat_target])
-            # FIFO
+            # FIFO. If some episodes are shorter than size_segment (Gym fall
+            # terminations), drop those first so queryable trajs are kept.
+            # When every traj is long enough (DMC), drop_i stays 0: original FIFO.
             if len(self.inputs) > self.max_size:
-                self.inputs = self.inputs[1:]
-                self.targets = self.targets[1:]
+                drop_i = 0
+                for i in range(len(self.inputs) - 1):
+                    traj = self.inputs[i]
+                    if not isinstance(traj, np.ndarray) or traj.shape[0] < self.size_segment:
+                        drop_i = i
+                        break
+                del self.inputs[drop_i]
+                del self.targets[drop_i]
             self.inputs.append([])
             self.targets.append([])
         else:
@@ -316,9 +328,14 @@ class RewardModel:
         if len(self.inputs[-1]) < len_traj:
             max_len = max_len - 1
         
-        # get train traj
-        train_inputs = np.array(self.inputs[:max_len])
-        train_targets = np.array(self.targets[:max_len])
+        # DMC: every completed episode has the same T, so this stacks to
+        # (N, T, dim). Gym MuJoCo can terminate early; then np.array raises
+        # and we fall back to per-trajectory segments of length size_segment.
+        try:
+            train_inputs = np.array(self.inputs[:max_len])
+            train_targets = np.array(self.targets[:max_len])
+        except ValueError:
+            return self._get_queries_varlen(mb_size)
    
         batch_index_2 = np.random.choice(max_len, size=mb_size, replace=True)
         sa_t_2 = train_inputs[batch_index_2] # Batch x T x dim of s&a
@@ -345,6 +362,31 @@ class RewardModel:
         r_t_2 = np.take(r_t_2, time_index_2, axis=0) # Batch x size_seg x 1
                 
         return sa_t_1, sa_t_2, r_t_1, r_t_2
+
+    def _get_queries_varlen(self, mb_size=20):
+        candidates = [
+            i for i, traj in enumerate(self.inputs)
+            if isinstance(traj, np.ndarray) and traj.shape[0] >= self.size_segment
+        ]
+        if len(candidates) == 0:
+            raise NoQueryableTrajectories(
+                "No trajectories of length >= %d available for preference queries."
+                % self.size_segment
+            )
+
+        batch_index_1 = np.random.choice(candidates, size=mb_size, replace=True)
+        batch_index_2 = np.random.choice(candidates, size=mb_size, replace=True)
+        sa_t_1, sa_t_2, r_t_1, r_t_2 = [], [], [], []
+        for i1, i2 in zip(batch_index_1, batch_index_2):
+            t1, t2 = self.inputs[i1], self.inputs[i2]
+            y1, y2 = self.targets[i1], self.targets[i2]
+            start1 = np.random.randint(0, t1.shape[0] - self.size_segment + 1)
+            start2 = np.random.randint(0, t2.shape[0] - self.size_segment + 1)
+            sa_t_1.append(t1[start1:start1 + self.size_segment])
+            sa_t_2.append(t2[start2:start2 + self.size_segment])
+            r_t_1.append(y1[start1:start1 + self.size_segment])
+            r_t_2.append(y2[start2:start2 + self.size_segment])
+        return np.stack(sa_t_1), np.stack(sa_t_2), np.stack(r_t_1), np.stack(r_t_2)
 
     def put_queries(self, sa_t_1, sa_t_2, labels):
         total_sample = sa_t_1.shape[0]

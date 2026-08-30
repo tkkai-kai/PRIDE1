@@ -13,7 +13,7 @@ import tqdm
 
 from logger import Logger
 from replay_buffer import ReplayBuffer, DiffReplayBuffer
-from reward_model import RewardModel
+from reward_model import RewardModel, NoQueryableTrajectories
 from collections import deque
 
 import utils
@@ -38,6 +38,7 @@ class Workspace(object):
         utils.set_seed_everywhere(cfg.seed)
         self.device = torch.device(cfg.device)
         self.log_success = False
+        self.last_eval_step = 0
         
         # make env
         if 'metaworld' in cfg.env:
@@ -155,24 +156,28 @@ class Workspace(object):
                 
         # get feedbacks
         labeled_queries, noisy_queries = 0, 0
-        if first_flag == 1:
-            # if it is first time to get feedback, need to use random sampling
-            labeled_queries = self.reward_model.uniform_sampling()
-        else:
-            if self.cfg.feed_type == 0:
+        try:
+            if first_flag == 1:
+                # if it is first time to get feedback, need to use random sampling
                 labeled_queries = self.reward_model.uniform_sampling()
-            elif self.cfg.feed_type == 1:
-                labeled_queries = self.reward_model.disagreement_sampling()
-            elif self.cfg.feed_type == 2:
-                labeled_queries = self.reward_model.entropy_sampling()
-            elif self.cfg.feed_type == 3:
-                labeled_queries = self.reward_model.kcenter_sampling()
-            elif self.cfg.feed_type == 4:
-                labeled_queries = self.reward_model.kcenter_disagree_sampling()
-            elif self.cfg.feed_type == 5:
-                labeled_queries = self.reward_model.kcenter_entropy_sampling()
             else:
-                raise NotImplementedError
+                if self.cfg.feed_type == 0:
+                    labeled_queries = self.reward_model.uniform_sampling()
+                elif self.cfg.feed_type == 1:
+                    labeled_queries = self.reward_model.disagreement_sampling()
+                elif self.cfg.feed_type == 2:
+                    labeled_queries = self.reward_model.entropy_sampling()
+                elif self.cfg.feed_type == 3:
+                    labeled_queries = self.reward_model.kcenter_sampling()
+                elif self.cfg.feed_type == 4:
+                    labeled_queries = self.reward_model.kcenter_disagree_sampling()
+                elif self.cfg.feed_type == 5:
+                    labeled_queries = self.reward_model.kcenter_entropy_sampling()
+                else:
+                    raise NotImplementedError
+        except NoQueryableTrajectories as e:
+            print("Skip reward update: %s" % e)
+            return
         
         self.total_feedback += self.reward_model.mb_size
         self.labeled_feedback += labeled_queries
@@ -413,7 +418,7 @@ class Workspace(object):
                 
                 if self.cfg.diffusion_schedule:
                     retrain_diffusion_step = self.step + self.cfg.retrain_diffusion_every * self.cfg.num_train_steps / (self.cfg.num_train_steps-self.step +1)
-            ###########################################################
+            ###########################################################            
             if done:
                 if self.step > 0:
                     self.logger.log('train/duration', time.time() - start_time, self.step)
@@ -423,10 +428,17 @@ class Workspace(object):
                         self.step, save=(self.step > self.cfg.num_seed_steps))
 
                 # evaluate agent periodically
-                if self.step > 0 and self.step % self.cfg.eval_frequency == 0:
-                    self.logger.log('eval/episode', episode, self.step)
-                    self.evaluate()
-                
+                # OpenAI gym tasks vs. DMC tasks                    
+                if self.cfg.env in ["HalfCheetah-v2", "Walker2d-v2", "Hopper-v2"]:
+                    if self.step > 0 and self.step - self.last_eval_step >= self.cfg.eval_openai_gym_frequency:
+                        self.logger.log('eval/episode', episode, self.step)
+                        self.evaluate()
+                        self.last_eval_step = self.step
+                else:
+                    if self.step > 0 and self.step % self.cfg.eval_frequency == 0:
+                        self.logger.log('eval/episode', episode, self.step)
+                        self.evaluate()
+
                 self.logger.log('train/episode_reward', episode_reward, self.step)
                 self.logger.log('train/true_episode_reward', true_episode_reward, self.step)
                 self.logger.log('train/total_feedback', self.total_feedback, self.step)

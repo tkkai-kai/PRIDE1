@@ -124,8 +124,30 @@ pride_slurm_job_init() {
     fi
     set -u
 
+    # GPU Anaconda modules can activate a namesake env that is not the home prefix
+    # (interactive `conda activate synprefenv` then has no gym). Prefer the home env.
+    home_env="${HOME}/.conda/envs/${CONDA_ENV}"
+    if [[ -x "${home_env}/bin/python" ]]; then
+        export PATH="${home_env}/bin:${PATH}"
+        export CONDA_PREFIX="${home_env}"
+        export CONDA_DEFAULT_ENV="${CONDA_ENV}"
+    fi
+
     export MUJOCO_GL PRIDE_DEVICE
-    export LD_LIBRARY_PATH="${CONDA_PREFIX}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+    export CPATH="${CONDA_PREFIX}/include${CPATH:+:${CPATH}}"
+    mujoco_bin="${HOME}/.mujoco/mujoco210/bin"
+    ld_parts=()
+    if [[ -d "${mujoco_bin}" ]]; then
+        ld_parts+=("${mujoco_bin}")
+    fi
+    if [[ -d /usr/lib/nvidia ]]; then
+        ld_parts+=("/usr/lib/nvidia")
+    fi
+    ld_parts+=("${CONDA_PREFIX}/lib")
+    if [[ -n "${LD_LIBRARY_PATH:-}" ]]; then
+        ld_parts+=("${LD_LIBRARY_PATH}")
+    fi
+    export LD_LIBRARY_PATH="$(IFS=:; echo "${ld_parts[*]}")"
     export PRIDE_ENTRY_MODULE="${entrypoint%.py}"
     mkdir -p outputs slurm_output
     echo "cluster=${PRIDE_CLUSTER} partition=${SLURM_PARTITION} env=${CONDA_DEFAULT_ENV:-${CONDA_ENV}} device=${PRIDE_DEVICE}"
