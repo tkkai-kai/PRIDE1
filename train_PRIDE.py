@@ -84,7 +84,9 @@ class Workspace(object):
         self.snapshot_sample_size = int(cfg.snapshot_sample_size)
         self.snapshot_recent_window = int(cfg.snapshot_recent_window)
         self.snapshot_dir = os.path.join(self.work_dir, str(cfg.snapshot_dir))
-
+        self.synthetic_sample_size = int(cfg.synthetic_sample_size)
+        self.synthetic_dir = os.path.join(
+            self.work_dir, "synthetic_transitions", str(self.cfg.env))
         # records when the current synthetic buffer was generated
         self.last_diffusion_retrain_step = None
 
@@ -223,6 +225,40 @@ class Workspace(object):
             np.arange(0, buffer.idx, dtype=np.int64),
         ])
 
+    def _meta(self, value):
+        return np.array([value], dtype=np.int64)
+
+    def save_synthetic_transitions(self, retrain_step):
+        syn_size = len(self.diffusion_replay_buffer)
+        if syn_size == 0:
+            print(f"[SYN] step={retrain_step}: synthetic buffer empty, skip.")
+            return
+
+        rng = np.random.default_rng(int(self.cfg.seed) + int(retrain_step) + 7654321)
+        n = min(int(self.synthetic_sample_size), syn_size)
+        indices = rng.choice(syn_size, size=n, replace=False)
+        syn_obs = self.diffusion_replay_buffer.obses[indices].astype(np.float32)
+        syn_actions = self.diffusion_replay_buffer.actions[indices].astype(np.float32)
+        syn_rewards = self.diffusion_replay_buffer.rewards[indices].astype(np.float32)
+        syn_next_obs = self.diffusion_replay_buffer.next_obses[indices].astype(np.float32)
+
+        os.makedirs(self.synthetic_dir, exist_ok=True)
+        save_path = os.path.join(
+            self.synthetic_dir, f"synthetic_transitions_step_{retrain_step}.npz")
+
+        np.savez_compressed(
+            save_path,
+            step=self._meta(retrain_step),
+            seed=self._meta(int(self.cfg.seed)),
+            env=np.array([str(self.cfg.env)]),
+            synthetic_buffer_size=self._meta(syn_size),
+            synthetic_obs=syn_obs,
+            synthetic_actions=syn_actions,
+            synthetic_rewards=syn_rewards,
+            synthetic_next_obs=syn_next_obs,
+        )
+        print(f"[SYN] saved {n}/{syn_size} transitions: {save_path}")
+
     def save_transition_snapshot(self, snapshot_step):
         """Dump samples of real, recent-real and synthetic transitions to npz.
 
@@ -291,19 +327,17 @@ class Workspace(object):
         save_path = os.path.join(
             self.snapshot_dir, f"snapshot_step_{snapshot_step}.npz")
 
-        def meta(value):
-            return np.array([value], dtype=np.int64)
 
         np.savez_compressed(
             save_path,
-            step=meta(snapshot_step),
-            seed=meta(int(self.cfg.seed)),
-            real_buffer_size=meta(real_size),
-            synthetic_buffer_size=meta(syn_size),
-            last_diffusion_retrain_step=meta(
+            step=self._meta(snapshot_step),
+            seed=self._meta(int(self.cfg.seed)),
+            real_buffer_size=self._meta(real_size),
+            synthetic_buffer_size=self._meta(syn_size),
+            last_diffusion_retrain_step=self._meta(
                 -1 if last_retrain is None else last_retrain),
-            synthetic_age=meta(synthetic_age),
-            retrain_diffusion_every=meta(int(self.cfg.retrain_diffusion_every)),
+            synthetic_age=self._meta(synthetic_age),
+            retrain_diffusion_every=self._meta(int(self.cfg.retrain_diffusion_every)),
             real_obs=real_obs,
             real_actions=real_actions,
             real_rewards=real_rewards,
@@ -392,6 +426,9 @@ class Workspace(object):
                 print(f'Adding {self.cfg.num_samples} samples to replay buffer.')
                 for o, a, r, o2, term in zip(observations, actions, rewards, next_observations, terminals):
                     self.diffusion_replay_buffer.add(o, a, r, o2, term, term)
+                
+                if self.cfg.save_synthetic_transitions :
+                    self.save_synthetic_transitions(self.step + 1)
                 # record the last diffusion retrain step
                 self.last_diffusion_retrain_step = self.step + 1
 
