@@ -127,6 +127,11 @@ class ElucidatedDiffusion(nn.Module):
 
         return out
 
+    def replace(self, x, y, mask, sigma):
+        # if sigma==0, don't add noise
+        noised_y = y if sigma == 0 else y + sigma * torch.randn_like(x)
+        return mask * noised_y + (1.0 - mask) * x
+
     # sample schedule, equation (5) in the paper
     def sample_schedule(self, num_sample_steps=None):
         num_sample_steps = default(num_sample_steps, self.num_sample_steps)
@@ -141,6 +146,77 @@ class ElucidatedDiffusion(nn.Module):
         sigmas = F.pad(sigmas, (0, 1), value=0.)  # last step is sigma value of 0.
         return sigmas
 
+    @torch.no_grad()
+    def sample_masked(
+        self,
+        known_values: torch.Tensor,
+        known_mask: torch.Tensor,
+        num_sample_steps: int = None,
+        clamp: bool = True,
+        cond=None,
+    ):
+        """
+            s,a are known values, s' is the only output.
+            We want to sample s' given s,a.
+        """
+        
+        # normalize known values
+        known_values = known_values.to(self.device)
+        known_mask = known_mask.to(self.device).float()
+        y = self.normalizer.normalize(known_values)
+        
+        batch_size = known_values.shape[0]
+
+        num_sample_steps = default(num_sample_steps, self.num_sample_steps)
+        shape = (batch_size, *self.event_shape)
+
+        # get the schedule, which is returned as (sigma, gamma) tuple, and pair up with the next sigma and gamma
+        sigmas = self.sample_schedule(num_sample_steps)
+        gammas = torch.where(
+            (sigmas >= self.S_tmin) & (sigmas <= self.S_tmax),
+            min(self.S_churn / num_sample_steps, math.sqrt(2) - 1),
+            0.
+        )
+
+        sigmas_and_gammas = list(zip(sigmas[:-1], sigmas[1:], gammas[:-1]))
+
+        # inputs are noise at the beginning
+        init_sigma = sigmas[0]
+        inputs = init_sigma * torch.randn(shape, device=self.device)
+        inputs = known_mask * (y + init_sigma *torch.randn_like(inputs)) + (1.0 - known_mask) * inputs
+
+        for sigma, sigma_next, gamma in sigmas_and_gammas:
+            sigma, sigma_next, gamma = map(lambda t: t.item(), (sigma, sigma_next, gamma))
+
+            eps = self.S_noise * torch.randn(shape, device=self.device)  # stochastic sampling
+
+            sigma_hat = sigma + gamma * sigma
+            inputs_hat = inputs + math.sqrt(sigma_hat ** 2 - sigma ** 2) * eps
+
+            # add noise on known values
+            inputs_hat = self.replace(inputs_hat, y, known_mask, sigma_hat)
+            denoised_over_sigma = self.score_fn(inputs_hat, sigma_hat, clamp=clamp, cond=cond)
+            inputs_next = inputs_hat + (sigma_next - sigma_hat) * denoised_over_sigma
+
+            if sigma_next != 0:
+                # add noise on known values
+                inputs_next = self.replace(inputs_next, y, known_mask, sigma_next)
+                denoised_prime_over_sigma = self.score_fn(inputs_next, sigma_next, clamp=clamp, cond=cond)
+                inputs_next = inputs_hat + 0.5 * (sigma_next - sigma_hat) * (
+                        denoised_over_sigma + denoised_prime_over_sigma)
+
+            inputs = self.replace(inputs_next, y, known_mask, sigma_next)
+
+
+        if clamp:
+            inputs = known_mask * inputs + (1.0 - known_mask) * inputs.clamp(-1., 1.)
+
+        known_cols = known_mask.squeeze().bool()
+        max_err = (inputs[:, known_cols] - y[:, known_cols]).abs().max()
+        if max_err > 1e-4:
+            print(f'[sample_masked] known dims drifted by {float(max_err):.2e}')
+        return self.normalizer.unnormalize(inputs)
+    
     @torch.no_grad()
     def sample(
             self,
@@ -581,17 +657,8 @@ class REDQTrainer(Trainer):
             if self.model_terminals:
                 data.append(done_np)
 
-            # obs = obs
-            # next_obs = next_obs
-            # actions = actions
-            # rewards = rewards
-            # done_np = (1 - not_done_no_max)
-            # data = [obs, actions, rewards, next_obs]
-            # if self.model_terminals:
-            #     data.append(done)
             data = np.concatenate(data, axis=1)
             data = torch.from_numpy(data).float().to(obs.device)
-            # loss = self.train_on_batch(data, use_wandb=False)
             loss = self.train_on_batch(data)
             if j % 1000 == 0:
                 print(f'[{j}/{num_steps}] loss: {loss:.4f}')

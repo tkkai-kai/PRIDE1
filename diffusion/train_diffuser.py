@@ -11,6 +11,59 @@ from diffusion.elucidated_diffusion import Trainer
 from diffusion.norm import MinMaxNormalizer
 from diffusion.utils import split_diffusion_samples, construct_diffusion_model
 
+class ConditionalDiffusionGenerator:
+    def __init__(
+            self,
+            cfg,
+            env: gym.Env,
+            ema_model,
+            num_sample_steps: int = 128,
+            sample_batch_size: int = 100000,
+    ):
+        self.cfg = cfg
+        self.env = env
+        self.diffusion = ema_model
+        self.diffusion.eval()
+        # Clamp samples if normalizer is MinMaxNormalizer
+        self.clamp_samples = isinstance(self.diffusion.normalizer, MinMaxNormalizer)
+        self.num_sample_steps = cfg.num_sample_steps
+        self.sample_batch_size = sample_batch_size
+        print(f'Conditional sampling using: {self.num_sample_steps} steps, {self.sample_batch_size} batch size.')
+
+    def conditional_sample(
+            self,
+            known_values: torch.Tensor,
+            known_mask: torch.Tensor,
+    ) -> (np.ndarray, np.ndarray, np.ndarray):
+        num_samples = known_values.shape[0]
+        batch_size = min(self.sample_batch_size, num_samples)
+        num_batches = (num_samples + batch_size - 1) // batch_size
+        observations = []
+        actions = []
+        next_observations = []
+        for i, start in enumerate(range(0, num_samples, batch_size)):
+            end = min(start + batch_size, num_samples)
+            print(f'Generating split {i + 1} of {num_batches}')
+            sampled_outputs = self.diffusion.sample_masked(
+                known_values=known_values[start:end],
+                known_mask=known_mask,
+                num_sample_steps=self.num_sample_steps,
+                clamp=self.clamp_samples,
+            )
+            sampled_outputs = sampled_outputs.cpu().numpy()
+            transitions = split_diffusion_samples(
+                sampled_outputs, self.env, self.cfg.model_terminals)
+            if len(transitions) == 4:
+                obs, act, _, next_obs = transitions
+            else:
+                obs, act, _, next_obs, _ = transitions
+            observations.append(obs)
+            actions.append(act)
+            next_observations.append(next_obs)
+        observations = np.concatenate(observations, axis=0)
+        actions = np.concatenate(actions, axis=0)
+        next_observations = np.concatenate(next_observations, axis=0)
+        return observations, actions, next_observations
 
 # @gin.configurable
 class SimpleDiffusionGenerator:

@@ -65,6 +65,8 @@ snapshot_sample_size: 10000
 snapshot_recent_window: 20000
 snapshot_dir: transition_snapshots
 synthetic_sample_size: 10000
+# Real (s,a) -> diffusion s' pairs dumped at each retrain for offline MSE.
+analysis_sample_size: 10000
 
 # reward learning
 segment: 50
