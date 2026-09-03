@@ -10,10 +10,10 @@ set -euo pipefail
 : "${SEED:?SEED must be exported by the submitter}"
 : "${OUTPUT_NAME:?OUTPUT_NAME must be exported by the submitter}"
 RETRAIN_DIFFUSION_EVERY="${RETRAIN_DIFFUSION_EVERY:-}"
-SAVE_SNAPSHOTS="${SAVE_SNAPSHOTS:-0}"
+SAVE_SNAPSHOTS="${SAVE_SNAPSHOTS:-1}"
 # Query-selection scheme: 0 uniform, 1 disagreement, 2 entropy, 3 k-center,
 # 4 k-center+disagreement, 5 k-center+entropy. Default 2 matches submit_paper_baseline.sh.
-FEED_TYPE="${FEED_TYPE:-2}"
+FEED_TYPE="${FEED_TYPE:-0}"
 
 # shellcheck source=config/hpc/slurm_preamble.sh
 source "${PRIDE_ROOT:-${SLURM_SUBMIT_DIR}}/config/hpc/slurm_preamble.sh"

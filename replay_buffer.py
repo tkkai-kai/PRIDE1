@@ -70,7 +70,7 @@ class ReplayBuffer(object):
             self.idx = next_index
         
     def relabel_with_predictor(self, predictor):
-        batch_size = 200
+        batch_size = 4096
         total_iter = int(self.idx/batch_size)
         
         if self.idx > batch_size*total_iter:
@@ -85,7 +85,7 @@ class ReplayBuffer(object):
             actions = self.actions[index*batch_size:last_index]
             inputs = np.concatenate([obses, actions], axis=-1)
             
-            pred_reward = predictor.r_hat_batch(inputs)
+            pred_reward = predictor.r_hat_batch(inputs, batch_size=batch_size)
             self.rewards[index*batch_size:last_index] = pred_reward
 
 

@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# One PRIDE seed on batch_relabel_synthetic_r, hyperparameter-matched to the
-# baseline 2k paper pilot (pride_20260731_paper_qw_2k_pilot1_retry3_ret2000_mf2000).
-# Submit through scripts/hpc/submit_paper_batchrelabel_2k.sh.
+# One PRIDE seed on batch_relabel_synthetic_r, hyperparameter-matched to
+# pride-pilot (retrain 10000). Submit through scripts/hpc/submit_paper_batchrelabel_2k.sh.
 #SBATCH --job-name=pride_qw_batchrelabel
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -11,7 +10,7 @@ set -euo pipefail
 
 : "${SEED:?SEED must be exported by the submitter}"
 : "${OUTPUT_NAME:?OUTPUT_NAME must be exported by the submitter}"
-RETRAIN_DIFFUSION_EVERY="${RETRAIN_DIFFUSION_EVERY:-2000}"
+RETRAIN_DIFFUSION_EVERY="${RETRAIN_DIFFUSION_EVERY:-10000}"
 MAX_FEEDBACK="${MAX_FEEDBACK:-2000}"
 NUM_TRAIN_STEPS="${NUM_TRAIN_STEPS:-1000000}"
 DIFFUSION_SAMPLE_RATIO="${DIFFUSION_SAMPLE_RATIO:-0.5}"

@@ -7,16 +7,22 @@
 #   FEED_TYPE=0 bash scripts/hpc/submit_paper_baseline.sh pride-pilot
 #   DRY_RUN=1 bash scripts/hpc/submit_paper_baseline.sh pride-remaining
 #   DRY_RUN=1 bash scripts/hpc/submit_paper_baseline.sh pride-2k-pilot
+#   bash scripts/hpc/submit_paper_baseline.sh pride-ft0
+#   bash scripts/hpc/submit_paper_baseline.sh pride-2k-ft0
 #
 # FEED_TYPE (default 2 entropy): 0 uniform, 1 disagreement, 2 entropy,
 # 3 k-center, 4 k-center+disagreement, 5 k-center+entropy.
+# pride-ft0 / pride-2k-ft0 lock FEED_TYPE=0 (uniform) regardless of the env var.
+#
+# pride-ft0 and pride-2k-ft0 are meant to match pride-pilot's code
+# (quality-snapshot-baseline). Do not submit them from batch_relabel_synthetic_r.
 set -euo pipefail
 
 MODE="${1:-}"
 case "${MODE}" in
-    pebble|pride-pilot|pride-remaining|pride-2k-pilot) ;;
+    pebble|pride-pilot|pride-remaining|pride-2k-pilot|pride-ft0|pride-2k-ft0) ;;
     *)
-        echo "Usage: $0 {pebble|pride-pilot|pride-remaining|pride-2k-pilot}" >&2
+        echo "Usage: $0 {pebble|pride-pilot|pride-remaining|pride-2k-pilot|pride-ft0|pride-2k-ft0}" >&2
         exit 2
         ;;
 esac
@@ -29,6 +35,12 @@ DRY_RUN="${DRY_RUN:-0}"
 RUN_DATE="${RUN_DATE:-$(date +%Y%m%d)}"
 RUN_TAG="${RUN_TAG:-paper_qw_${RUN_DATE}}"
 FEED_TYPE="${FEED_TYPE:-2}"
+if [[ "${MODE}" == "pride-ft0" || "${MODE}" == "pride-2k-ft0" ]]; then
+    if [[ "${FEED_TYPE}" != "0" ]]; then
+        echo "NOTE: ${MODE} locks FEED_TYPE=0 (uniform); ignoring FEED_TYPE=${FEED_TYPE}"
+    fi
+    FEED_TYPE="0"
+fi
 case "${FEED_TYPE}" in
     0) SAMPLING="uniform" ;;
     1) SAMPLING="disagreement" ;;
@@ -73,6 +85,22 @@ case "${MODE}" in
         SLURM_TIME="4-00:00:00"
         RETRAIN_DIFFUSION_EVERY="2000"
         ;;
+    pride-ft0)
+        METHOD="PRIDE"
+        SEEDS=(12345)
+        JOB_BODY="scripts/quadruped_walk/2000/oracle/submit_PRIDE_paper_slurm.sh"
+        OUTPUT_NAME="pride_${RUN_DATE}_${RUN_TAG}_yaml_ret10000_mf2000"
+        SLURM_TIME="48:00:00"
+        RETRAIN_DIFFUSION_EVERY=""
+        ;;
+    pride-2k-ft0)
+        METHOD="PRIDE"
+        SEEDS=(12345)
+        JOB_BODY="scripts/quadruped_walk/2000/oracle/submit_PRIDE_paper_slurm.sh"
+        OUTPUT_NAME="pride_${RUN_DATE}_${RUN_TAG}_ret2000_mf2000"
+        SLURM_TIME="4-00:00:00"
+        RETRAIN_DIFFUSION_EVERY="2000"
+        ;;
 esac
 OUTPUT_NAME="${OUTPUT_NAME}_ft${FEED_TYPE}"
 
@@ -87,7 +115,10 @@ export SLURM_MAIL_TYPE="${SLURM_MAIL_TYPE:-BEGIN,END,FAIL,TIME_LIMIT}"
 pride_hpc_init "${REPO_ROOT}"
 mkdir -p "${LOG_DIR}"
 
+BRANCH="$(git -C "${REPO_ROOT}" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
+
 echo "=== ${METHOD} paper baseline: ${MODE} ==="
+echo "branch=${BRANCH}"
 echo "env=quadruped_walk seeds=${SEEDS[*]} steps=1000000 feedback=2000"
 echo "oracle=true feed_type=${FEED_TYPE} (${SAMPLING}) segment=50 unsupervised_steps=9000"
 if [[ "${METHOD}" == "PRIDE" ]]; then
@@ -97,6 +128,14 @@ echo "partition=${SLURM_PARTITION} gres=${SLURM_GRES} time=${SLURM_TIME} exclude
 echo "mail=${SLURM_MAIL_USER} type=${SLURM_MAIL_TYPE}"
 echo "output=outputs/${OUTPUT_NAME}_seed<seed>"
 echo "logs=${LOG_DIR}"
+
+if [[ "${MODE}" == "pride-ft0" || "${MODE}" == "pride-2k-ft0" ]]; then
+    if [[ "${BRANCH}" == *batch_relabel* ]]; then
+        echo "ERROR: ${MODE} must be submitted from quality-snapshot-baseline to match pride-pilot." >&2
+        echo "Currently on ${BRANCH}, which also batch-relabels synthetic r." >&2
+        exit 1
+    fi
+fi
 
 for seed in "${SEEDS[@]}"; do
     output_dir="${REPO_ROOT}/outputs/${OUTPUT_NAME}_seed${seed}"
