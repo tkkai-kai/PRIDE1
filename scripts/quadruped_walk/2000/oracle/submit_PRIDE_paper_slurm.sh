@@ -13,7 +13,7 @@ RETRAIN_DIFFUSION_EVERY="${RETRAIN_DIFFUSION_EVERY:-}"
 SAVE_SNAPSHOTS="${SAVE_SNAPSHOTS:-0}"
 # Query-selection scheme: 0 uniform, 1 disagreement, 2 entropy, 3 k-center,
 # 4 k-center+disagreement, 5 k-center+entropy. Default 2 matches submit_paper_baseline.sh.
-FEED_TYPE="${FEED_TYPE:-2}"
+FEED_TYPE="${FEED_TYPE:-0}"
 
 # shellcheck source=config/hpc/slurm_preamble.sh
 source "${PRIDE_ROOT:-${SLURM_SUBMIT_DIR}}/config/hpc/slurm_preamble.sh"
@@ -52,6 +52,14 @@ train_args=(
 if [[ -n "${RETRAIN_DIFFUSION_EVERY}" ]]; then
     train_args+=("retrain_diffusion_every=${RETRAIN_DIFFUSION_EVERY}")
 fi
+# DMC cannot be restored in MuJoCo; keep Gym-only simulator dumps off.
+train_args+=("save_synthetic_transitions=false")
+# ANALYSIS_STEPS=none matches Jul 31 original (no mask generation).
+# Underscores, not commas: Slurm --export splits on ',' .
+if [[ "${ANALYSIS_STEPS:-}" == "none" || "${ANALYSIS_STEPS:-}" == "off" ]]; then
+    echo "analysis_steps=[] (disabled)"
+    train_args+=("analysis_steps=[]")
+fi
 
 # Snapshot steps are derived from the retrain interval rather than hard-coded:
 # a step that is an exact multiple of the interval always reports
@@ -61,15 +69,43 @@ fi
 if [[ "${SAVE_SNAPSHOTS}" == "1" ]]; then
     interval="${RETRAIN_DIFFUSION_EVERY:-10000}"
     steps=()
+    analysis_bases=()
+    # Masked analysis only runs when retrain_step is an exact multiple of
+    # the interval. Default: snap 100k/300k/500k/700k/900k to the nearest
+    # retrain. ANALYSIS_STEPS=300000,600000,900000 overrides that list.
+    snap_to_interval() {
+        local base="$1"
+        local q=$(( (base + interval / 2) / interval ))
+        local snapped=$((q * interval))
+        if (( snapped < interval )); then
+            snapped="${interval}"
+        fi
+        echo "${snapped}"
+    }
     for base in 100000 300000 500000; do
         steps+=("$((base + 1))" "$((base + interval / 2))" "$((base + interval - 1))")
     done
+    if [[ "${ANALYSIS_STEPS:-}" == "none" || "${ANALYSIS_STEPS:-}" == "off" ]]; then
+        analysis_bases=()
+    elif [[ -n "${ANALYSIS_STEPS:-}" ]]; then
+        # Underscores, not commas: Slurm --export splits on ',' .
+        IFS='_,' read -r -a analysis_bases <<< "${ANALYSIS_STEPS}"
+    else
+        for base in 100000 300000 500000 700000 900000; do
+            analysis_bases+=("$(snap_to_interval "${base}")")
+        done
+    fi
     steps_csv="$(IFS=,; echo "${steps[*]}")"
     echo "snapshots=on steps=[${steps_csv}]"
     train_args+=(
         save_transition_snapshots=true
         "snapshot_steps=[${steps_csv}]"
     )
+    if [[ ${#analysis_bases[@]} -gt 0 ]]; then
+        analysis_csv="$(IFS=,; echo "${analysis_bases[*]}")"
+        echo "analysis_steps=[${analysis_csv}]"
+        train_args+=("analysis_steps=[${analysis_csv}]")
+    fi
 fi
 
 train_args+=("hydra.run.dir=outputs/${OUTPUT_NAME}_seed${SEED}")

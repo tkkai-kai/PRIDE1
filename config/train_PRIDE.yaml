@@ -45,7 +45,10 @@ num_sample_steps: 128
 # Off by default; the submit scripts turn it on per run so that unrelated
 # runs on this branch do not write snapshots.
 save_transition_snapshots: false
-save_synthetic_transitions: true
+# Unconditional diffusion dumps for MuJoCo one-step replay (Gym only).
+# DMC states cannot be restored in the simulator, so this stays off unless
+# an OpenAI Gym submit script turns it on.
+save_synthetic_transitions: false
 
 # Offset off the retrain boundary on purpose: a step that is an exact
 # multiple of retrain_diffusion_every always yields synthetic_age == 0,
@@ -55,7 +58,6 @@ save_synthetic_transitions: true
 # recompute them whenever the interval differs.
 snapshot_steps:
   - 100001
-  - 200001
   - 300001
   - 500001
   - 700001
@@ -65,8 +67,16 @@ snapshot_sample_size: 10000
 snapshot_recent_window: 20000
 snapshot_dir: transition_snapshots
 synthetic_sample_size: 10000
-# Real (s,a) -> diffusion s' pairs dumped at each retrain for offline MSE.
+# Real (s,a) -> diffusion s' pairs for offline conditional MSE.
+# Masked generation only runs when a diffusion retrain lands on one of
+# these steps (must be multiples of retrain_diffusion_every). Empty -> never.
 analysis_sample_size: 10000
+analysis_steps:
+  - 100000
+  - 300000
+  - 500000
+  - 700000
+  - 900000
 
 # reward learning
 segment: 50

@@ -88,6 +88,17 @@ class Workspace(object):
         self.synthetic_dir = os.path.join(
             self.work_dir, "synthetic_transitions", str(self.cfg.env))
         self.analysis_dir = os.path.join(self.work_dir, "analysis", str(self.cfg.env))
+        # Simulator replay of dumped (s, a, s') only works on OpenAI Gym.
+        # DMC observations cannot be set back into MuJoCo, so skip the dump.
+        self.save_synthetic_transitions = bool(cfg.save_synthetic_transitions)
+        if self.save_synthetic_transitions and not self._is_openai_gym_env():
+            print(
+                f"[SYN] env={self.cfg.env}: disable synthetic_transitions "
+                f"(DMC cannot be restored in the simulator)"
+            )
+            self.save_synthetic_transitions = False
+        # Conditional (mask) analysis only at these retrain steps.
+        self.analysis_steps = set(int(x) for x in self.cfg.analysis_steps)
         # records when the current synthetic buffer was generated
         self.last_diffusion_retrain_step = None
 
@@ -229,7 +240,14 @@ class Workspace(object):
     def _meta(self, value):
         return np.array([value], dtype=np.int64)
 
+    def _is_openai_gym_env(self):
+        return str(self.cfg.env) in ("HalfCheetah-v2", "Walker2d-v2", "Hopper-v2")
+
     def save_synthetic_transitions(self, retrain_step):
+        """Dump unconditional diffusion samples for Gym simulator MSE.
+
+        Not useful on DMC: those observations cannot be restored in MuJoCo.
+        """
         syn_size = len(self.diffusion_replay_buffer)
         if syn_size == 0:
             print(f"[SYN] step={retrain_step}: synthetic buffer empty, skip.")
@@ -366,7 +384,11 @@ class Workspace(object):
             self.device)
 
     def analyze_diffusion_model(self, diffusion_trainer, retrain_step):
-        """Condition on real (s, a) and dump s'_syn vs s'_real for offline MSE."""
+        """Condition on real (s, a) and dump s'_syn vs s'_real for offline MSE.
+
+        Only called at analysis checkpoints (see cfg.analysis_steps): masked
+        conditional generation is expensive and is not needed every retrain.
+        """
         real_size = len(self.replay_buffer)
         if real_size == 0:
             print(f"[ANALYSIS] step={retrain_step}: real buffer empty, skip.")
@@ -467,13 +489,19 @@ class Workspace(object):
                 diffusion_trainer.train_from_redq_buffer(self.replay_buffer)
                 self.reset_diffusion_buffer()
                 
-                cpu_rng = torch.get_rng_state()
-                cuda_rng = torch.cuda.get_rng_state_all()
-                # analysis of diffusion model
-                self.analyze_diffusion_model(diffusion_trainer, self.step + 1)
-
-                torch.set_rng_state(cpu_rng)
-                torch.cuda.set_rng_state_all(cuda_rng)
+                retrain_step = self.step + 1
+                if retrain_step in self.analysis_steps:
+                    cpu_rng = torch.get_rng_state()
+                    cuda_rng = torch.cuda.get_rng_state_all()
+                    # Masked conditional generation only at analysis checkpoints.
+                    self.analyze_diffusion_model(diffusion_trainer, retrain_step)
+                    torch.set_rng_state(cpu_rng)
+                    torch.cuda.set_rng_state_all(cuda_rng)
+                else:
+                    print(
+                        f"[ANALYSIS] step={retrain_step}: skip mask generation "
+                        f"(not in analysis_steps)"
+                    )
                 
                 # Add samples to agent replay buffer
                 generator = SimpleDiffusionGenerator(self.cfg, env=self.env, ema_model=diffusion_trainer.ema.ema_model)
@@ -483,7 +511,7 @@ class Workspace(object):
                 for o, a, r, o2, term in zip(observations, actions, rewards, next_observations, terminals):
                     self.diffusion_replay_buffer.add(o, a, r, o2, term, term)
                 
-                if self.cfg.save_synthetic_transitions :
+                if self.save_synthetic_transitions:
                     self.save_synthetic_transitions(self.step + 1)
                 # record the last diffusion retrain step
                 self.last_diffusion_retrain_step = self.step + 1

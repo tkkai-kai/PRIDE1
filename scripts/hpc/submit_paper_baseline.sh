@@ -29,6 +29,8 @@ DRY_RUN="${DRY_RUN:-0}"
 RUN_DATE="${RUN_DATE:-$(date +%Y%m%d)}"
 RUN_TAG="${RUN_TAG:-paper_qw_${RUN_DATE}}"
 FEED_TYPE="${FEED_TYPE:-2}"
+# Job body defaults to 0; --export=NONE drops a shell-only SAVE_SNAPSHOTS=1.
+SAVE_SNAPSHOTS="${SAVE_SNAPSHOTS:-0}"
 case "${FEED_TYPE}" in
     0) SAMPLING="uniform" ;;
     1) SAMPLING="disagreement" ;;
@@ -69,11 +71,16 @@ case "${MODE}" in
         METHOD="PRIDE"
         SEEDS=(12345)
         JOB_BODY="scripts/quadruped_walk/2000/oracle/submit_PRIDE_paper_slurm.sh"
-        OUTPUT_NAME="pride_${RUN_DATE}_${RUN_TAG}_ret2000_mf2000"
-        SLURM_TIME="4-00:00:00"
-        RETRAIN_DIFFUSION_EVERY="2000"
+        # Allow RETRAIN_DIFFUSION_EVERY=20000/30000 for interval ablations.
+        RETRAIN_DIFFUSION_EVERY="${RETRAIN_DIFFUSION_EVERY:-2000}"
+        OUTPUT_NAME="pride_${RUN_DATE}_${RUN_TAG}_ret${RETRAIN_DIFFUSION_EVERY}_mf2000"
+        SLURM_TIME="${SLURM_TIME:-4-00:00:00}"
         ;;
 esac
+if [[ -n "${SEED_LIST:-}" ]]; then
+    # shellcheck disable=SC2206
+    SEEDS=(${SEED_LIST})
+fi
 OUTPUT_NAME="${OUTPUT_NAME}_ft${FEED_TYPE}"
 
 # gpu-h100 was retired; H100s now sit in the general gpu partition.
@@ -92,6 +99,7 @@ echo "env=quadruped_walk seeds=${SEEDS[*]} steps=1000000 feedback=2000"
 echo "oracle=true feed_type=${FEED_TYPE} (${SAMPLING}) segment=50 unsupervised_steps=9000"
 if [[ "${METHOD}" == "PRIDE" ]]; then
     echo "diffusion_ratio=0.5 retrain_every=${RETRAIN_DIFFUSION_EVERY:-10000} warm_start=false"
+    echo "save_transition_snapshots=${SAVE_SNAPSHOTS} save_synthetic_transitions=false (DMC; Gym-only dump)"
 fi
 echo "partition=${SLURM_PARTITION} gres=${SLURM_GRES} time=${SLURM_TIME} exclude=${SLURM_EXCLUDE:-none}"
 echo "mail=${SLURM_MAIL_USER} type=${SLURM_MAIL_TYPE}"
@@ -110,9 +118,12 @@ for seed in "${SEEDS[@]}"; do
     stdout="${LOG_DIR}/${METHOD,,}_${MODE}_s${seed}_%j.out"
     stderr="${LOG_DIR}/${METHOD,,}_${MODE}_s${seed}_%j.err"
     # NONE avoids leaking submit-shell conda/PATH state into the batch job.
-    export_vars="NONE,PRIDE_ROOT=${REPO_ROOT},SEED=${seed},OUTPUT_NAME=${OUTPUT_NAME},FEED_TYPE=${FEED_TYPE}"
+    export_vars="NONE,PRIDE_ROOT=${REPO_ROOT},SEED=${seed},OUTPUT_NAME=${OUTPUT_NAME},FEED_TYPE=${FEED_TYPE},SAVE_SNAPSHOTS=${SAVE_SNAPSHOTS}"
     if [[ -n "${RETRAIN_DIFFUSION_EVERY}" ]]; then
         export_vars+=",RETRAIN_DIFFUSION_EVERY=${RETRAIN_DIFFUSION_EVERY}"
+    fi
+    if [[ -n "${ANALYSIS_STEPS:-}" ]]; then
+        export_vars+=",ANALYSIS_STEPS=${ANALYSIS_STEPS}"
     fi
 
     if [[ "${DRY_RUN}" == "1" ]]; then
