@@ -55,16 +55,20 @@ case "${MODE}" in
         METHOD="PRIDE"
         SEEDS=(12345)
         JOB_BODY="scripts/quadruped_walk/2000/oracle/submit_PRIDE_paper_slurm.sh"
-        OUTPUT_NAME="pride_${RUN_DATE}_${RUN_TAG}_ret2000_mf2000"
-        SLURM_TIME="4-00:00:00"
-        RETRAIN_DIFFUSION_EVERY="2000"
+        RETRAIN_DIFFUSION_EVERY="${RETRAIN_DIFFUSION_EVERY:-2000}"
+        OUTPUT_NAME="pride_${RUN_DATE}_${RUN_TAG}_ret${RETRAIN_DIFFUSION_EVERY}_mf2000"
+        SLURM_TIME="${SLURM_TIME:-4-00:00:00}"
         ;;
 esac
+if [[ -n "${SEED_LIST:-}" ]]; then
+    # shellcheck disable=SC2206
+    SEEDS=(${SEED_LIST})
+fi
 
-export SLURM_PARTITION="${SLURM_PARTITION:-gpu-h100}"
+export SLURM_PARTITION="${SLURM_PARTITION:-gpu}"
 export SLURM_QOS="${SLURM_QOS:-gpu}"
-export SLURM_GRES="${SLURM_GRES:-gpu:1}"
-export SLURM_EXCLUDE="${SLURM_EXCLUDE:-}"
+export SLURM_GRES="${SLURM_GRES:-gpu:h100:1}"
+export SLURM_EXCLUDE="${SLURM_EXCLUDE:-gpu26}"
 export SLURM_TIME
 export SLURM_MAIL_USER="${SLURM_MAIL_USER:-${USER}@sheffield.ac.uk}"
 export SLURM_MAIL_TYPE="${SLURM_MAIL_TYPE:-BEGIN,END,FAIL,TIME_LIMIT}"
@@ -97,6 +101,9 @@ for seed in "${SEEDS[@]}"; do
     export_vars="NONE,PRIDE_ROOT=${REPO_ROOT},SEED=${seed},OUTPUT_NAME=${OUTPUT_NAME}"
     if [[ -n "${RETRAIN_DIFFUSION_EVERY}" ]]; then
         export_vars+=",RETRAIN_DIFFUSION_EVERY=${RETRAIN_DIFFUSION_EVERY}"
+    fi
+    if [[ -n "${ANALYSIS_STEPS:-}" ]]; then
+        export_vars+=",ANALYSIS_STEPS=${ANALYSIS_STEPS}"
     fi
 
     if [[ "${DRY_RUN}" == "1" ]]; then
@@ -173,16 +180,20 @@ case "${MODE}" in
         METHOD="PRIDE"
         SEEDS=(12345)
         JOB_BODY="scripts/quadruped_walk/2000/oracle/submit_PRIDE_paper_slurm.sh"
-        OUTPUT_NAME="pride_${RUN_DATE}_${RUN_TAG}_ret2000_mf2000"
-        SLURM_TIME="4-00:00:00"
-        RETRAIN_DIFFUSION_EVERY="2000"
+        RETRAIN_DIFFUSION_EVERY="${RETRAIN_DIFFUSION_EVERY:-2000}"
+        OUTPUT_NAME="pride_${RUN_DATE}_${RUN_TAG}_ret${RETRAIN_DIFFUSION_EVERY}_mf2000"
+        SLURM_TIME="${SLURM_TIME:-4-00:00:00}"
         ;;
 esac
+if [[ -n "${SEED_LIST:-}" ]]; then
+    # shellcheck disable=SC2206
+    SEEDS=(${SEED_LIST})
+fi
 
-export SLURM_PARTITION="${SLURM_PARTITION:-gpu-h100}"
+export SLURM_PARTITION="${SLURM_PARTITION:-gpu}"
 export SLURM_QOS="${SLURM_QOS:-gpu}"
-export SLURM_GRES="${SLURM_GRES:-gpu:1}"
-export SLURM_EXCLUDE="${SLURM_EXCLUDE:-}"
+export SLURM_GRES="${SLURM_GRES:-gpu:h100:1}"
+export SLURM_EXCLUDE="${SLURM_EXCLUDE:-gpu26}"
 export SLURM_TIME
 pride_hpc_init "${REPO_ROOT}"
 mkdir -p "${LOG_DIR}"

@@ -47,6 +47,17 @@ train_args=(
 if [[ -n "${RETRAIN_DIFFUSION_EVERY}" ]]; then
     train_args+=("retrain_diffusion_every=${RETRAIN_DIFFUSION_EVERY}")
 fi
+if [[ -n "${ANALYSIS_STEPS:-}" ]]; then
+    if [[ "${ANALYSIS_STEPS}" == "none" || "${ANALYSIS_STEPS}" == "off" ]]; then
+        echo "analysis_steps=[] (disabled)"
+        train_args+=("analysis_steps=[]")
+    else
+        IFS='_,' read -r -a analysis_bases <<< "${ANALYSIS_STEPS}"
+        analysis_csv="$(IFS=,; echo "${analysis_bases[*]}")"
+        echo "analysis_steps=[${analysis_csv}]"
+        train_args+=("analysis_steps=[${analysis_csv}]")
+    fi
+fi
 train_args+=("hydra.run.dir=outputs/${OUTPUT_NAME}_seed${SEED}")
 
 python train_PRIDE.py "${train_args[@]}"

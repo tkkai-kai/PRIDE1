@@ -20,7 +20,7 @@ import utils
 import hydra
 
 from diffusion.elucidated_diffusion import REDQTrainer
-from diffusion.train_diffuser import SimpleDiffusionGenerator
+from diffusion.train_diffuser import SimpleDiffusionGenerator, ConditionalDiffusionGenerator
 from diffusion.utils import construct_diffusion_model
 
 class Workspace(object):
@@ -77,6 +77,10 @@ class Workspace(object):
         self.total_feedback = 0
         self.labeled_feedback = 0
         self.step = 0
+
+        # Conditional (mask) analysis only at these retrain steps.
+        self.analysis_dir = os.path.join(self.work_dir, "analysis", str(self.cfg.env))
+        self.analysis_steps = set(int(x) for x in getattr(self.cfg, "analysis_steps", []))
 
         # instantiating the reward model
         self.reward_model = RewardModel(
@@ -184,6 +188,57 @@ class Workspace(object):
         print("Reward function is updated!! ACC: " + str(total_acc))
 
 
+    def _meta(self, value):
+        return np.array([value], dtype=np.int64)
+
+    def analyze_diffusion_model(self, diffusion_trainer, retrain_step):
+        """Condition on real (s, a) and dump s'_syn vs s'_real for offline MSE."""
+        real_size = len(self.replay_buffer)
+        if real_size == 0:
+            print(f"[ANALYSIS] step={retrain_step}: real buffer empty, skip.")
+            return
+
+        obs_dim = self.env.observation_space.shape[0]
+        act_dim = self.env.action_space.shape[0]
+        D = obs_dim + act_dim + 1 + obs_dim
+        if self.cfg.model_terminals:
+            D += 1
+
+        n = min(int(self.cfg.analysis_sample_size), real_size)
+        rng = np.random.default_rng(int(self.cfg.seed) + int(retrain_step) + 2468013)
+        indices = rng.choice(real_size, size=n, replace=False)
+        real_obs = self.replay_buffer.obses[indices].astype(np.float32)
+        real_actions = self.replay_buffer.actions[indices].astype(np.float32)
+        real_next_obs = self.replay_buffer.next_obses[indices].astype(np.float32)
+
+        known_mask = torch.zeros(D, dtype=torch.float32)
+        known_mask[:obs_dim + act_dim] = 1.0
+        known_values = torch.zeros((n, D), dtype=torch.float32)
+        known_values[:, :obs_dim] = torch.from_numpy(real_obs)
+        known_values[:, obs_dim:obs_dim + act_dim] = torch.from_numpy(real_actions)
+
+        analysis_gen = ConditionalDiffusionGenerator(
+            self.cfg, env=self.env, ema_model=diffusion_trainer.ema.ema_model)
+        _, _, syn_next_obs = analysis_gen.conditional_sample(
+            known_values=known_values,
+            known_mask=known_mask,
+        )
+
+        os.makedirs(self.analysis_dir, exist_ok=True)
+        save_path = os.path.join(
+            self.analysis_dir, f"conditional_next_obs_step_{retrain_step}.npz")
+        np.savez_compressed(
+            save_path,
+            step=self._meta(retrain_step),
+            seed=self._meta(int(self.cfg.seed)),
+            env=np.array([str(self.cfg.env)]),
+            real_obs=real_obs,
+            real_actions=real_actions,
+            real_next_obs=real_next_obs,
+            syn_next_obs=syn_next_obs,
+        )
+        print(f"[ANALYSIS] saved {n}/{real_size} pairs: {save_path}")
+
     def reset_diffusion_buffer(self):
         self.diffusion_replay_buffer = ReplayBuffer(
             self.env.observation_space.shape,
@@ -245,6 +300,19 @@ class Workspace(object):
                 diffusion_trainer.update_normalizer(self.replay_buffer, device=self.device)
                 diffusion_trainer.train_from_redq_buffer(self.replay_buffer)
                 self.reset_diffusion_buffer()
+
+                retrain_step = self.step + 1
+                if retrain_step in self.analysis_steps:
+                    cpu_rng = torch.get_rng_state()
+                    cuda_rng = torch.cuda.get_rng_state_all()
+                    self.analyze_diffusion_model(diffusion_trainer, retrain_step)
+                    torch.set_rng_state(cpu_rng)
+                    torch.cuda.set_rng_state_all(cuda_rng)
+                else:
+                    print(
+                        f"[ANALYSIS] step={retrain_step}: skip mask generation "
+                        f"(not in analysis_steps)"
+                    )
 
                 # Add samples to agent replay buffer
                 generator = SimpleDiffusionGenerator(self.cfg, env=self.env, ema_model=diffusion_trainer.ema.ema_model)
