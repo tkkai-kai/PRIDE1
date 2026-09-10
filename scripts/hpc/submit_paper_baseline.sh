@@ -102,6 +102,10 @@ for seed in "${SEEDS[@]}"; do
     if [[ -n "${RETRAIN_DIFFUSION_EVERY}" ]]; then
         export_vars+=",RETRAIN_DIFFUSION_EVERY=${RETRAIN_DIFFUSION_EVERY}"
     fi
+    if [[ -n "${DIFFUSION_WARM_START:-}" ]]; then
+        export_vars+=",DIFFUSION_WARM_START=${DIFFUSION_WARM_START}"
+        export_vars+=",FINETUNE_RATIO_U=${FINETUNE_RATIO_U:-1}"
+    fi
     if [[ -n "${ANALYSIS_STEPS:-}" ]]; then
         export_vars+=",ANALYSIS_STEPS=${ANALYSIS_STEPS}"
     fi

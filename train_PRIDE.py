@@ -275,6 +275,10 @@ class Workspace(object):
             skip_dims = []
             
         retrain_diffusion_step = self.cfg.retrain_diffusion_every
+        # Warm-start: persistent diffusion trainer reused across retrains.
+        # None -> built (from scratch) on the first retrain.
+        diffusion_trainer = None
+        diffusion_warm_start = bool(getattr(self.cfg, "diffusion_warm_start", False))
         ###########################################################
 
 
@@ -285,20 +289,35 @@ class Workspace(object):
             if (self.step + 1) % retrain_diffusion_step == 0 and (self.step + 1) >= self.cfg.diffusion_start and self.step + 1 < self.cfg.num_train_steps:
                 print(f'Retraining diffusion model at step {self.step + 1}')
 
-                # Train new diffusion model
-                diffusion_trainer = REDQTrainer(
-                    self.cfg,
-                    construct_diffusion_model(
+                # Warm-start: reuse the existing trainer (fine-tune) once it exists;
+                # otherwise build a fresh model and train from scratch (original behavior).
+                warm_reuse = diffusion_warm_start and (diffusion_trainer is not None)
+                if not warm_reuse:
+                    diffusion_trainer = REDQTrainer(
                         self.cfg,
-                        inputs=inputs,
-                        skip_dims=skip_dims,
-                        disable_terminal_norm=self.cfg.model_terminals,  # No terminals in DMC(False), OpenAI(True)
-                    ),
-                    results_folder=self.work_dir,
-                    model_terminals=self.cfg.model_terminals,
-                )
+                        construct_diffusion_model(
+                            self.cfg,
+                            inputs=inputs,
+                            skip_dims=skip_dims,
+                            disable_terminal_norm=self.cfg.model_terminals,  # No terminals in DMC(False), OpenAI(True)
+                        ),
+                        results_folder=self.work_dir,
+                        model_terminals=self.cfg.model_terminals,
+                    )
                 diffusion_trainer.update_normalizer(self.replay_buffer, device=self.device)
-                diffusion_trainer.train_from_redq_buffer(self.replay_buffer)
+                if warm_reuse:
+                    finetune_ratio_u = float(getattr(self.cfg, "finetune_ratio_U", 1))
+                    finetune_steps = int(finetune_ratio_u * int(self.cfg.retrain_diffusion_every))
+                    finetune_lr = float(getattr(self.cfg, "diffusion_finetune_lr", 1e-4))
+                    print(
+                        f'Warm-start fine-tune: U={finetune_ratio_u:g} '
+                        f'-> {finetune_steps} steps at lr={finetune_lr}'
+                    )
+                    diffusion_trainer.set_constant_lr(finetune_lr)
+                    diffusion_trainer.train_from_redq_buffer(
+                        self.replay_buffer, num_steps=finetune_steps)
+                else:
+                    diffusion_trainer.train_from_redq_buffer(self.replay_buffer)
                 self.reset_diffusion_buffer()
 
                 retrain_step = self.step + 1

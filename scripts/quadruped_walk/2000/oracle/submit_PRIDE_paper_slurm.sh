@@ -47,6 +47,11 @@ train_args=(
 if [[ -n "${RETRAIN_DIFFUSION_EVERY}" ]]; then
     train_args+=("retrain_diffusion_every=${RETRAIN_DIFFUSION_EVERY}")
 fi
+if [[ -n "${DIFFUSION_WARM_START:-}" ]]; then
+    echo "diffusion_warm_start=${DIFFUSION_WARM_START} finetune_ratio_U=${FINETUNE_RATIO_U:-1}"
+    train_args+=("diffusion_warm_start=${DIFFUSION_WARM_START}")
+    train_args+=("finetune_ratio_U=${FINETUNE_RATIO_U:-1}")
+fi
 if [[ -n "${ANALYSIS_STEPS:-}" ]]; then
     if [[ "${ANALYSIS_STEPS}" == "none" || "${ANALYSIS_STEPS}" == "off" ]]; then
         echo "analysis_steps=[] (disabled)"

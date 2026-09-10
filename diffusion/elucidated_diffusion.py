@@ -430,6 +430,17 @@ class Trainer(object):
         self.model.normalizer.to(self.accelerator.device)
         self.ema.ema_model.normalizer.to(self.accelerator.device)
 
+    def set_constant_lr(self, lr: float):
+        """Switch to a fixed learning rate and disable the scheduler.
+
+        Used for warm-start fine-tuning: the cosine scheduler is sized to
+        train_num_steps and decays to ~0, so reusing the trainer across retrains
+        would otherwise leave the LR pinned near zero. Calling this is idempotent.
+        """
+        self.lr_scheduler = None
+        for param_group in self.opt.param_groups:
+            param_group['lr'] = lr
+
     def save(self, milestone):
         if not self.accelerator.is_local_main_process:
             return
