@@ -65,8 +65,16 @@ snapshot_sample_size: 10000
 snapshot_recent_window: 20000
 snapshot_dir: transition_snapshots
 synthetic_sample_size: 10000
-# Real (s,a) -> diffusion s' pairs dumped at each retrain for offline MSE.
+# Real (s,a) -> diffusion s' pairs for offline conditional MSE.
+# Masked generation only runs when a diffusion retrain lands on one of
+# these steps (must be multiples of retrain_diffusion_every). Empty -> never.
 analysis_sample_size: 10000
+analysis_steps:
+  - 100000
+  - 300000
+  - 500000
+  - 700000
+  - 900000
 
 # reward learning
 segment: 50

@@ -88,6 +88,8 @@ class Workspace(object):
         self.synthetic_dir = os.path.join(
             self.work_dir, "synthetic_transitions", str(self.cfg.env))
         self.analysis_dir = os.path.join(self.work_dir, "analysis", str(self.cfg.env))
+        # Conditional (mask) analysis only at these retrain steps.
+        self.analysis_steps = set(int(x) for x in getattr(self.cfg, "analysis_steps", []))
         # records when the current synthetic buffer was generated
         self.last_diffusion_retrain_step = None
 
@@ -466,14 +468,19 @@ class Workspace(object):
                 diffusion_trainer.update_normalizer(self.replay_buffer, device=self.device)
                 diffusion_trainer.train_from_redq_buffer(self.replay_buffer)
                 self.reset_diffusion_buffer()
-                
-                cpu_rng = torch.get_rng_state()
-                cuda_rng = torch.cuda.get_rng_state_all()
-                # analysis of diffusion model
-                self.analyze_diffusion_model(diffusion_trainer, self.step + 1)
 
-                torch.set_rng_state(cpu_rng)
-                torch.cuda.set_rng_state_all(cuda_rng)
+                retrain_step = self.step + 1
+                if retrain_step in self.analysis_steps:
+                    cpu_rng = torch.get_rng_state()
+                    cuda_rng = torch.cuda.get_rng_state_all()
+                    self.analyze_diffusion_model(diffusion_trainer, retrain_step)
+                    torch.set_rng_state(cpu_rng)
+                    torch.cuda.set_rng_state_all(cuda_rng)
+                else:
+                    print(
+                        f"[ANALYSIS] step={retrain_step}: skip mask generation "
+                        f"(not in analysis_steps)"
+                    )
                 
                 # Add samples to agent replay buffer
                 generator = SimpleDiffusionGenerator(self.cfg, env=self.env, ema_model=diffusion_trainer.ema.ema_model)
