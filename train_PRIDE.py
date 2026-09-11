@@ -451,6 +451,9 @@ class Workspace(object):
                             
                         self.learn_reward()
                         self.replay_buffer.relabel_with_predictor(self.reward_model)
+                        # relabel difussion buffer with reward model
+                        # if self.diffusion_replay_buffer.idx > 0:
+                        #     self.diffusion_replay_buffer.relabel_with_predictor(self.reward_model)
                         interact_count = 0
                         
                 self.agent.update(self.replay_buffer, self.logger, self.step, 1, True, self.diffusion_replay_buffer, self.cfg.diffusion_sample_ratio)
